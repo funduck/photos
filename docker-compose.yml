@@ -6,8 +6,8 @@ services:
     image: ghcr.io/immich-app/immich-server:v3
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - /Users/oleg/Immich/library:/data # Assets are stored separately on host
-      - /Volumes/EXTDATA/Oleg/Photos:/mnt/media/library # Main library is stored in external drive # TODO remove :ro
+      - $IMMICH_DIR/library:/data # Assets are stored separately on host
+      - $STORAGE_DIR/Photos:/mnt/media/library # Main library is stored in external drive # TODO remove :ro
     environment:
       TZ: Asia/Tbilisi
       DB_PASSWORD: ${DB_PASSWORD}
@@ -30,7 +30,7 @@ services:
     # No hardware acceleration on macOS/Docker Desktop — plain CPU image
     image: ghcr.io/immich-app/immich-machine-learning:v3
     volumes:
-      - /Users/oleg/Immich/ml-model-cache:/cache
+      - $IMMICH_DIR/ml-model-cache:/cache
     restart: unless-stopped
     healthcheck:
       disable: false
@@ -46,7 +46,7 @@ services:
     healthcheck:
       test: redis-cli ping | grep -q PONG || exit 1
     volumes:
-      - /Users/oleg/Immich/redis:/data
+      - $IMMICH_DIR/redis:/data
     restart: unless-stopped
     user: "503:20"
     security_opt:
@@ -64,7 +64,7 @@ services:
       POSTGRES_INITDB_ARGS: --data-checksums
       DB_STORAGE_TYPE: SSD
     volumes:
-      - /Users/oleg/Immich/postgres-data:/var/lib/postgresql/data
+      - $IMMICH_DIR/postgres-data:/var/lib/postgresql/data
     user: "503:20"
     shm_size: 128mb
     restart: unless-stopped

@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListBucketOnly",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::$AWS_BUCKET"
+    },
+    {
+      "Sid": "ObjectActions",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectAttributes",
+        "s3:RestoreObject"
+      ],
+      "Resource": "arn:aws:s3:::$AWS_BUCKET/*"
+    }
+  ]
+}

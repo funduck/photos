@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run everytime when you want to backup photos from host to storage2. This is additional backup
 
-src=/Users/oleg/SyncPhones/oleg-pixel/
-dst=/Volumes/Expansion/data/Oleg/Photos/oleg-pixel/
+src=$PHONE_TMP_DIR/
+dst=$PHONE_STORAGE_DIR2/
 
 if [ ! -d "$dst" ]; then
     echo "Destination directory $dst does not exist. Exiting."

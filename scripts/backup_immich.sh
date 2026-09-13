@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run after immich is down
 
-src=/Users/oleg/Immich/
-dst=/Volumes/EXTDATA/Oleg/Immich/
+src=$IMMICH_DIR/
+dst=$STORAGE_DIR/Immich/
 
 if [ ! -d "$dst" ]; then
     echo "Destination directory $dst does not exist. Creating."
