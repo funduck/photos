@@ -22,7 +22,7 @@ Requirements:
 
 Usage:
   export IMMICH_URL="http://localhost:2283"
-  export IMMITCH_DEDUP_API_KEY="..."
+  export IMMICH_DEDUP_API_KEY="..."
   python3 dedup_immich.py --dry-run     # just print the plan
   python3 dedup_immich.py --execute     # actually delete (not recoverable)
 """
@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 import requests
 
 IMMICH_URL = os.environ.get("IMMICH_URL", "http://localhost:2283").rstrip("/")
-API_KEY = os.environ.get("IMMITCH_DEDUP_API_KEY")
+API_KEY = os.environ.get("IMMICH_DEDUP_API_KEY")
 
 log = logging.getLogger("duplicate_resolver")
 
@@ -50,7 +50,7 @@ def setup_logging(log_file: str):
 
 def api_headers():
     if not API_KEY:
-        sys.exit("Set the IMMITCH_DEDUP_API_KEY environment variable")
+        sys.exit("Set the IMMICH_DEDUP_API_KEY environment variable")
     return {"x-api-key": API_KEY, "Accept": "application/json"}
 
 

@@ -13,7 +13,7 @@ flowchart TB
 
 Additionally `rsync` stores a backup on a second external storage (`scripts/backup_photos2.sh`).
 
-Immich assets and its Postgres database are also backed up to main storage using `rsync` (`scripts/backup_immitch.sh`).
+Immich assets and its Postgres database are also backed up to main storage using `rsync` (`scripts/backup_immich.sh`).
 
 ## Storage
 For a start I use external USB drives (2 copies).
@@ -32,15 +32,15 @@ before starting the stack.
 ## Scripts
 - `scripts/backup_photos.sh` — rsync phone photos from the host to primary external storage. Scheduled every 30 min via `scripts/com.user.backup_photos.plist` (macOS launchd).
 - `scripts/backup_photos2.sh` — same, to the secondary external storage. Not currently scheduled; run manually.
-- `scripts/backup_immitch.sh` — backs up Immich assets and stops/starts the Postgres container to safely copy `postgres-data`. Run manually after stopping Immich.
-- `scripts/duplicate_resolver.py` — calls the Immich API to find duplicate groups (via the ML duplicate-detection job), keeps the earliest-dated asset per group, and deletes the rest. Requires `IMMICH_URL` and `IMMITCH_DEDUP_API_KEY` env vars (see `.env.example`). Supports `--dry-run` / `--execute` and `--allow-name-mismatch`; logs every decision to `duplicate_resolver.log`.
+- `scripts/backup_immich.sh` — backs up Immich assets and stops/starts the Postgres container to safely copy `postgres-data`. Run manually after stopping Immich.
+- `scripts/duplicate_resolver.py` — calls the Immich API to find duplicate groups (via the ML duplicate-detection job), keeps the earliest-dated asset per group, and deletes the rest. Requires `IMMICH_URL` and `IMMICH_DEDUP_API_KEY` env vars (see `.env.example`). Supports `--dry-run` / `--execute` and `--allow-name-mismatch`; logs every decision to `duplicate_resolver.log`.
 
 ### Setup
 ```
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in IMMITCH_DEDUP_API_KEY and DB_PASSWORD
+cp .env.example .env   # fill in IMMICH_DEDUP_API_KEY and DB_PASSWORD
 set -a; source .env; set +a   # export vars into the shell for duplicate_resolver.py
 ```
 
@@ -49,7 +49,7 @@ set -a; source .env; set +a   # export vars into the shell for duplicate_resolve
 ## What's missing / TODO
 - **Offsite backup**: no 3rd copy exists yet (S3 or similar). Losing both external drives (e.g. theft, fire) loses everything.
 - **No restore procedure documented**: there are backup scripts but no tested/written steps for restoring Immich (assets + Postgres dump) or photos from a backup copy.
-- **No scheduling for `backup_photos2.sh` and `backup_immitch.sh`**: only `backup_photos.sh` runs automatically via launchd; the secondary-storage and Immich backups are manual and easy to forget.
+- **No scheduling for `backup_photos2.sh` and `backup_immich.sh`**: only `backup_photos.sh` runs automatically via launchd; the secondary-storage and Immich backups are manual and easy to forget.
 - **No backup monitoring/alerting**: launchd writes logs to `~/Library/Logs/backup_photos.*`, but nothing checks them or notifies on failure (e.g. drive not mounted, rsync error).
 - **`duplicate_resolver.py` defaults to a dry delete**: `delete_assets()` currently hardcodes `force=False` (see the `# TODO` in the source) even in `--execute` mode, so duplicates are only trashed, not permanently removed, until that's changed intentionally.
 - **Immich library volume mounted read-only**: `docker-compose.yml` mounts the external library as `:ro` with a `# TODO remove :ro` note — Immich can't manage (e.g. delete/move) those assets until that's addressed.
