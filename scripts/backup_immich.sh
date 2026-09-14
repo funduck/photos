@@ -1,6 +1,8 @@
 #!/bin/bash
 # Run after immich is down
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env"
+
 src=$IMMICH_DIR/
 dst=$STORAGE_DIR/Immich/
 

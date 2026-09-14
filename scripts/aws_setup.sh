@@ -1,3 +1,6 @@
+# Just a collection of steps required to setup AWS S3 bucket and IAM user for rclone photo archive
+# Run manually one by one
+
 aws configure
 
 aws s3api create-bucket \
@@ -42,5 +45,5 @@ aws budgets create-budget \
       "ComparisonOperator": "GREATER_THAN",
       "Threshold": 100
     },
-    "Subscribers": [{"SubscriptionType": "EMAIL", "Address": "$EMAIL"}]
+    "Subscribers": [{"SubscriptionType": "EMAIL", "Address": "'"$EMAIL"'"}]
   }]'

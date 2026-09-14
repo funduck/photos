@@ -74,3 +74,20 @@ services:
       - no-new-privileges:true
     cap_drop:
       - NET_RAW
+
+  syncthing:
+    container_name: syncthing
+    image: syncthing/syncthing:latest
+    environment:
+      - PUID=503
+      - PGID=20
+    volumes:
+      - $IMMICH_DIR/syncthing-config:/var/syncthing/config
+      - $STORAGE_DIR/Test:/var/syncthing/Test
+      - $STORAGE_DIR/Photos:/var/syncthing/Photos
+    user: "503:20"
+    ports:
+      - "8385:8384"
+      - "22001:22000/tcp"
+      - "22001:22000/udp"
+    restart: unless-stopped
