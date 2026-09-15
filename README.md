@@ -40,9 +40,9 @@ A quick note, if you have internal drive big enough for your media - lucky you a
 
 ### Syncthing
 Three syncthing instances are involved:
-0. **Phone syncthing** (Send Only) — sends photos to the host's temp folder.
-1. **Host syncthing** (Send & Receive) — stores the phone media into a temp folder and relays further. This is the part that always works even if the external drive is unplugged or Docker is down.
-2. **Container syncthing** (Send & Receive) — syncs from that same temp folder into `$STORAGE_DIR/Photos`, the folder Immich reads. 
+1. **Phone syncthing** (Send Only) — sends photos to the host's temp folder.
+2. **Host syncthing** (Send & Receive) — stores the phone media into a temp folder and relays further. This is the part that always works even if the external drive is unplugged or Docker is down.
+3. **Container syncthing** (Send & Receive) — syncs from that same temp folder into `$STORAGE_DIR/Photos`, the folder Immich reads. 
 
 Important: folder modes should be exactly as described above
 * on phone - "Send Only" because you don't want to transfer files **to** phone, and you don't want deletes to propagate back to phone
