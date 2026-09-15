@@ -28,11 +28,13 @@ Setup looks complicated, but it is built gradually and you are free to stop at a
 
 ```mermaid
 flowchart LR
-    P[Phone] -. continuous send .-> T[Temp folder on host]
-    T -. syncthing-in-docker, when drive & docker .-> S[USB Drive: STORAGE_DIR/Photos]
-    S -. backup main storage to cloud .-> B[S3]
-    I[Immich assets and database] -. backup to main storage .-> S
+    P[Phone media] -. continuous send .-> T[Temp folder on host]
+    T -. syncthing-in-docker .-> S[USB Drive]
+    S -. rclone-in-docker .-> B[S3]
+    I[Immich assets and database] -. manually .-> S
 ```
+
+A quick note, if you have internal drive big enough for your media - lucky you are! No need to have a temp folder on host, you can just point Immich to the internal drive and skip the second syncthing. But if you have a small internal drive and want to keep your media on an external drive, this setup is for you.
 
 ## Setup
 
