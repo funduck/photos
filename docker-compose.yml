@@ -91,3 +91,29 @@ services:
       - "22001:22000/tcp"
       - "22001:22000/udp"
     restart: unless-stopped
+
+  rclone-s3-sync:
+    container_name: rclone_s3_sync
+    build: ./docker/rclone-s3-sync
+    environment:
+      TZ: Asia/Tbilisi
+      RCLONE_REMOTE: ${RCLONE_REMOTE}
+      RCLONE_ACCESS_KEY: ${RCLONE_ACCESS_KEY}
+      RCLONE_SECRET_ACCESS_KEY: ${RCLONE_SECRET_ACCESS_KEY}
+      AWS_BUCKET: ${AWS_BUCKET}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SYNC_NAME: ${RCLONE_SYNC_SUBDIR:-Photos}
+      SYNC_INTERVAL: ${RCLONE_SYNC_INTERVAL:-24h}
+      DRY_RUN: ${RCLONE_SYNC_DRY_RUN:-true}
+    volumes:
+      - $STORAGE_DIR/${RCLONE_SYNC_SUBDIR:-Photos}:/data:ro
+      - rclone_sync_state:/state
+    restart: unless-stopped
+    user: "503:20"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
+volumes:
+  rclone_sync_state:

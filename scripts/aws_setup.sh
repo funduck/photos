@@ -5,8 +5,8 @@ aws configure
 
 aws s3api create-bucket \
   --bucket $AWS_BUCKET \
-  --region eu-central-1 \
-  --create-bucket-configuration LocationConstraint=eu-central-1
+  --region $AWS_REGION \
+  --create-bucket-configuration LocationConstraint=$AWS_REGION
 
 aws s3api put-public-access-block \
   --bucket $AWS_BUCKET \

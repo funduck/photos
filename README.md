@@ -50,41 +50,38 @@ Create your configuration from **example** files:
 * `.env.example` → `.env` — Immich/API secrets (`DB_PASSWORD`, `IMMICH_DEDUP_API_KEY`) and the host paths `docker-compose.yml` mounts (`IMMICH_DIR`, `STORAGE_DIR`).
 * `scripts/.env.example` → `scripts/.env` — everything the shell scripts need: phone/storage paths, AWS account/bucket, and the `rclone` remote's access keys. Source it before running any script by hand, e.g. `set -a; source scripts/.env; set +a`.
 
-### Immich
-```
-docker compose up -d
-```
-
 ### S3 setup
 1. Fill in `AWS_ACCOUNT_ID`, `AWS_BUCKET` and `EMAIL` in `scripts/.env`.
-2. Run the commands in `scripts/aws_setup.sh` one at a time (`aws configure` first, then bucket creation, public-access block, encryption, IAM user/policy for `rclone`, and a $1 budget alert). It's a reference list, not a script meant to be executed as a whole — review each command before running it.
-3. Put the access key/secret it prints into `RCLONE_ACCESS_KEY` / `RCLONE_SECRET_ACCESS_KEY` in `scripts/.env`.
-4. Walk through `scripts/rclone_setup.sh` to configure the `rclone` remote and verify it with a dry-run and a small test upload before trusting it with the real library.
+2. Run the commands in `scripts/aws_setup.sh` one at a time — it's a reference list, not a script meant to be executed as a whole, so review each command before running it. It covers:
+   - `aws configure`
+   - bucket creation
+   - public-access block
+   - default encryption
+   - an IAM user/policy scoped for `rclone`
+   - a $1 budget alert
+3. Put the access key/secret it prints into `RCLONE_ACCESS_KEY` / `RCLONE_SECRET_ACCESS_KEY` in both `scripts/.env` and the root `.env` (see [Configs](#configs)).
+4. Bring up `docker compose up -d rclone-s3-sync`.
+   - It generates its own `rclone.conf` from those env vars.
+   - By default (`RCLONE_SYNC_DRY_RUN=true`) it runs a dry-run sync on startup — check `docker logs rclone_s3_sync` to verify it lists the right files before trusting it with the real library.
+   - Once verified, set `RCLONE_SYNC_DRY_RUN=false` in `.env` and restart the container.
+   - For ad hoc `rclone` CLI checks against the same credentials (e.g. `rclone lsd`), exec into the running container and reuse the config it already generated: `docker exec rclone_s3_sync rclone lsd $RCLONE_REMOTE:$AWS_BUCKET --config /tmp/rclone.conf`.
 
-### Backups
-- Phone → temp folder: **host syncthing** does it continuously, independent of the external drive or Docker.
-- Temp folder → primary drive: **container syncthing** does it continuously whenever the drive/Docker is up.
-- Primary drive → S3 (`DEEP_ARCHIVE`): manual (`backup_photos_to_s3.sh`).
-- Immich assets + Postgres → primary drive: manual, run after stopping Immich (`backup_immich.sh`).
-
-> `backup_photos.sh` / `backup_photos2.sh` (rsync from the temp folder to primary/secondary drive, `backup_photos.sh` previously scheduled via `scripts/com.user.backup_photos.plist`) are leftover from the pre-syncthing-container pipeline and no longer run as part of the active flow. There is currently no automated copy to a secondary drive.
+### Immich
+```
+docker compose up -d 
+```
 
 ## Duplicates Resolution
 Immich has a built-in functionality but when there are just too many duplicates with same names you can use `scripts/duplicate_resolver.py` to automatically delete these duplicates. 
 
-It calls the Immich API to find duplicate groups (via the ML duplicate-detection job), keeps the earliest-dated asset per group, and deletes the rest. Requires `IMMICH_URL` and `IMMICH_DEDUP_API_KEY` env vars (see `.env.example`). Supports `--dry-run` / `--execute` and `--allow-name-mismatch`; logs every decision to `duplicate_resolver.log`. 
+It calls the Immich API to find duplicate groups (via the ML duplicate-detection job), keeps the earliest-dated asset per group, and deletes the rest.  
 
-The images will be moved to bin, so you can restore them if needed.
+* Requires `IMMICH_URL` and `IMMICH_DEDUP_API_KEY` env vars (see `.env.example`).  
+* Supports `--dry-run` / `--execute` and `--allow-name-mismatch`; logs every decision to `duplicate_resolver.log`. 
 
-## Scripts
-- `scripts/backup_immich.sh` — backs up Immich assets and stops/starts the Postgres container to safely copy `postgres-data`. Run manually after stopping Immich.
-- `scripts/aws_setup.sh` — one-off commands to create the S3 bucket (with public access blocked and default encryption), an IAM user/policy scoped to it for `rclone`, and a monthly cost-guard budget alert. Reference commands to run by hand, not an idempotent script.
-- `scripts/rclone_setup.sh` — one-off `rclone config` + a dry-run and small test upload to verify the S3 remote before trusting it with a real sync.
-- `scripts/backup_photos_to_s3.sh` — syncs `$STORAGE_DIR/Photos` to the S3 bucket under the `DEEP_ARCHIVE` storage class (`--size-only`, so it's cheap to re-run). Not currently scheduled; run manually.
-- `scripts/duplicate_resolver.py` — calls the Immich API to find duplicate groups (via the ML duplicate-detection job), keeps the earliest-dated asset per group, and deletes the rest. Requires `IMMICH_URL` and `IMMICH_DEDUP_API_KEY` env vars (see `.env.example`). Supports `--dry-run` / `--execute` and `--allow-name-mismatch`; logs every decision to `duplicate_resolver.log`.
+The images will be moved to bin, so you can restore them if needed, otherwise empty the bin and the images will be removed from the drive.
 
 ## What's missing / TODO
-- **S3 sync isn't scheduled**: `backup_photos_to_s3.sh` has to be run by hand, so the offsite copy can silently fall behind.
 - **No restore procedure documented**: there are backup scripts but no tested/written steps for restoring Immich (assets + Postgres dump), photos from a backup copy, or the S3 archive.
 - **No scheduling for `backup_immich.sh`**: it's manual, so it's easy to forget to back up Immich's assets and database.
 - **No syncthing/backup monitoring or alerting**: nothing checks syncthing's sync status or notifies on failure (drive not mounted, sync stalled, etc.).
