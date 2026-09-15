@@ -13,7 +13,7 @@
 - [What's missing / TODO](#whats-missing--todo)
 
 ## My Pipeline
-1. You make a photo on your phone. [syncthing](https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid&hl=en) running on your phone (Send Only) publishes media to your host.
+1. [syncthing](https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid&hl=en) running on your phone (Send Only) publishes media to your host.
 2. [syncthing](https://syncthing.net/) running on the host (Send & Receive) copies phone data to a temp folder — this happens regardless of whether the external drive or Docker is up
 3. a **second syncthing**, running as a container alongside Immich (Send & Receive), picks up from the temp folder and writes into `$STORAGE_DIR/Photos` on the external USB drive whenever the drive/Docker is available
 4. [Immich](https://immich.app/) is used to browse and edit the collection, reading from that same folder.
