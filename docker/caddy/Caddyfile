@@ -1,0 +1,4 @@
+{$IMMICH_DOMAIN} {
+    tls {$IMMICH_EMAIL}
+	reverse_proxy immich-server:2283
+}

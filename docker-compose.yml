@@ -11,8 +11,8 @@ services:
     environment:
       TZ: Asia/Tbilisi
       DB_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - 2283:2283
+    expose:
+      - 2283
     depends_on:
       - redis
       - database
@@ -115,5 +115,32 @@ services:
     cap_drop:
       - NET_RAW
 
+  caddy:
+    container_name: caddy
+    image: caddy:2-alpine
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      TZ: Asia/Tbilisi
+      IMMICH_DOMAIN: ${IMMICH_DOMAIN}
+      IMMICH_EMAIL: ${IMMICH_EMAIL}
+    ports:
+      - 80:80
+      - 443:443
+    depends_on:
+      - immich-server
+    restart: unless-stopped
+    user: "503:20"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    cap_add:
+      - NET_BIND_SERVICE
+
 volumes:
   rclone_sync_state:
+  caddy_data:
+  caddy_config:
