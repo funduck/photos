@@ -28,8 +28,8 @@ Setup looks complicated, but it is built gradually and you are free to stop at a
 
 ```mermaid
 flowchart LR
-    P[Phone] -. continuous Send&Receive .-> T[Temp folder on host]
-    T -. syncthing-in-docker, when drive/Docker is up .-> S[USB Drive: STORAGE_DIR/Photos]
+    P[Phone] -. continuous send .-> T[Temp folder on host]
+    T -. syncthing-in-docker, when drive & docker .-> S[USB Drive: STORAGE_DIR/Photos]
     S -. backup main storage to cloud .-> B[S3]
     I[Immich assets and database] -. backup to main storage .-> S
 ```
@@ -37,9 +37,15 @@ flowchart LR
 ## Setup
 
 ### Syncthing
-Two syncthing instances are involved:
-1. **Host syncthing** (installed per the official docs) — Send & Receive with the phone into a temp folder. This is the part that always works even if the external drive is unplugged or Docker is down.
-2. **Container syncthing** (`docker-compose.yml`, alongside Immich) — syncs from that same temp folder into `$STORAGE_DIR/Photos`, the folder Immich reads. Web UI on port `8385`, sync protocol on `22001`; its config lives in `$IMMICH_DIR/syncthing-config` so it survives restarts.
+Three syncthing instances are involved:
+0. **Phone syncthing** (Send Only) — sends photos to the host's temp folder.
+1. **Host syncthing** (Send & Receive) — stores the phone media into a temp folder and relays further. This is the part that always works even if the external drive is unplugged or Docker is down.
+2. **Container syncthing** (Send & Receive) — syncs from that same temp folder into `$STORAGE_DIR/Photos`, the folder Immich reads. 
+
+Important: folder modes should be exactly as described above
+* on phone - "Send Only" because you don't want to transfer files **to** phone, and you don't want deletes to propagate back to phone
+* on host - "Send & Receive" because you want to receive from phone and send to container syncthing
+* on container - "Send & Receive" because you want to receive from host and send deletes back to host
 
 Nuance: connecting two syncthing instances on the *same host* over local discovery is flaky. Set an explicit LAN address (host IP + port, e.g. `tcp://127.0.0.1:22000`) on each side's device config instead of relying on auto-discovery — it connects reliably that way.
 
