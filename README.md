@@ -13,18 +13,18 @@
 - [What's missing / TODO](#whats-missing--todo)
 
 ## My Pipeline
-1. You make a photo on your phone
+1. You make a photo on your phone. [syncthing](https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid&hl=en) running on your phone (Send Only) publishes media to your host.
 2. [syncthing](https://syncthing.net/) running on the host (Send & Receive) copies phone data to a temp folder — this happens regardless of whether the external drive or Docker is up
-3. a **second syncthing**, running as a container alongside Immich, picks up from the temp folder and writes into `$STORAGE_DIR/Photos` on the external USB drive whenever the drive/Docker is available
+3. a **second syncthing**, running as a container alongside Immich (Send & Receive), picks up from the temp folder and writes into `$STORAGE_DIR/Photos` on the external USB drive whenever the drive/Docker is available
 4. [Immich](https://immich.app/) is used to browse and edit the collection, reading from that same folder.
 5. **rclone** backs up the main storage to S3
 
-Setup looks complicated, but it is built gradually:
+Setup looks complicated, but it is built gradually and you are free to stop at any step and still have a working backup of your phone photos. The steps I took were:
 * first, I had a **syncthing** saving my photos to a temp folder on host, and I lived like this for a couple of years
 * next, I decided to have another copy on external drive, so I wrote a simple **rsync** script and scheduled it via launchd
-* then, I tried **Immich** as a collection browser/deduplicator and it is just great
+* then, I tried **Immich** as a collection browser/deduplicator and it is just great, I almost forgot how much I loved Google Photos
 * then, I added a **second syncthing** as a container that picks up from the temp folder and writes into Immich's storage folder, replacing the rsync hop. The external drive isn't 100% reliable and can be unplugged, and Docker itself can be down — keeping the host-level syncthing → temp folder step means the backup from the phone always lands somewhere even then. This also sets things up for an eventual move to a NAS, where the container syncthing and Immich would just point at a network share instead of a local drive
-* and finally, I added **rclone** to back up the main storage to S3
+* and finally, I added container with **rclone** to back up the main storage to S3 regularly
 
 ```mermaid
 flowchart LR
@@ -66,7 +66,7 @@ Create your configuration from **example** files:
    - Once verified, set `RCLONE_SYNC_DRY_RUN=false` in `.env` and restart the container.
    - For ad hoc `rclone` CLI checks against the same credentials (e.g. `rclone lsd`), exec into the running container and reuse the config it already generated: `docker exec rclone_s3_sync rclone lsd $RCLONE_REMOTE:$AWS_BUCKET --config /tmp/rclone.conf`.
 
-### Immich
+### Start
 ```
 docker compose up -d 
 ```
