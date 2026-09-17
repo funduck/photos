@@ -109,7 +109,7 @@ services:
       DRY_RUN: ${RCLONE_SYNC_DRY_RUN:-true}
     volumes:
       - $STORAGE_DIR/${RCLONE_SYNC_SUBDIR:-Photos}:/data:ro
-      - rclone_sync_state:/state
+      - rclone_s3_sync:/state
     restart: unless-stopped
     user: "503:20"
     security_opt:
@@ -143,6 +143,6 @@ services:
       - NET_BIND_SERVICE
 
 volumes:
-  rclone_sync_state:
+  rclone_s3_sync:
   caddy_data:
   caddy_config:

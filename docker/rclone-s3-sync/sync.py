@@ -87,12 +87,8 @@ def run_sync(remote: str, bucket: str, sync_name: str, dry_run: bool) -> bool:
         "--transfers", "8",
         "--checkers", "16",
         "--progress",
-        "--exclude", "._*",
-        "--exclude", ".DS_Store",
-        "--exclude", ".Spotlight-V100/**",
-        "--exclude", ".Trashes/**",
-        "--exclude", ".fseventsd/**",
-        "--exclude", ".TemporaryItems/**",
+        "--exclude", ".*",
+        "--exclude", ".*/**",
     ]
     if dry_run:
         cmd.append("--dry-run")

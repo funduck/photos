@@ -47,3 +47,33 @@ aws budgets create-budget \
     },
     "Subscribers": [{"SubscriptionType": "EMAIL", "Address": "'"$EMAIL"'"}]
   }]'
+
+# --- Temporary delete permission (for scripts/delete_files.sh) ---
+# The rclone user is normally add-only. Grant DeleteObject as an inline policy,
+# run the deletes, then remove the policy again right away.
+
+# Versioned buckets turn deletes into delete markers, so the objects (and their
+# cost) stay. Expect "Enabled" to mean you need a different approach.
+aws s3api get-bucket-versioning --bucket $AWS_BUCKET
+
+aws iam put-user-policy \
+  --user-name rclone-photo-archive \
+  --policy-name rclone-temp-delete \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Sid": "TempDelete",
+      "Effect": "Allow",
+      "Action": ["s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::'"$AWS_BUCKET"'/Photos/*"
+    }]
+  }'
+
+# IAM changes can take a few seconds to apply. Confirm the policy is there:
+aws iam get-user-policy --user-name rclone-photo-archive --policy-name rclone-temp-delete
+
+# ... run scripts/delete_files.sh to_delete.txt --execute ...
+
+# Revoke, then confirm the list is empty:
+aws iam delete-user-policy --user-name rclone-photo-archive --policy-name rclone-temp-delete
+aws iam list-user-policies --user-name rclone-photo-archive
