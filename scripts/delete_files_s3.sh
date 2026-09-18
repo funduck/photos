@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Delete files listed in a text file (one absolute host path per line) both
-# locally and from the S3 backup written by the rclone-s3-sync container.
+# Delete files listed in a text file (one absolute host path per line) from the
+# S3 backup written by the rclone-s3-sync container. Local files are not
+# touched; use scripts/delete_files_local.sh with the same list for that.
 #
-# Local path  $STORAGE_DIR/$SUBDIR/<rel>  maps to  $RCLONE_REMOTE:$AWS_BUCKET/$SUBDIR/<rel>
+# Local path  $STORAGE_DIR/<rel>  maps to  $RCLONE_REMOTE:$AWS_BUCKET/<rel>
 #
 # S3 deletes run inside the rclone_s3_sync container so they reuse its
-# generated /tmp/rclone.conf and env (RCLONE_REMOTE, AWS_BUCKET, SYNC_NAME).
-# Run this on the host (macOS), where the /Volumes/... paths exist.
+# generated /tmp/rclone.conf and env (RCLONE_REMOTE, AWS_BUCKET).
+# The rclone IAM user is add-only; grant the temporary delete policy from
+# scripts/aws_setup.sh first.
 #
 # Usage:
-#   scripts/delete_files.sh to_delete.txt             # dry run (default)
-#   scripts/delete_files.sh to_delete.txt --execute   # really delete
+#   scripts/delete_files_s3.sh to_delete.txt             # dry run (default)
+#   scripts/delete_files_s3.sh to_delete.txt --execute   # really delete
 set -euo pipefail
 
 LIST_FILE="${1:?usage: $0 <list-file> [--execute]}"
@@ -21,9 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/.env"
 : "${STORAGE_DIR:?STORAGE_DIR not set in scripts/.env}"
 
-# Must match RCLONE_SYNC_SUBDIR of the container we exec into.
-SUBDIR="$(docker exec "$CONTAINER" sh -c 'printf %s "$SYNC_NAME"')"
-LOCAL_ROOT="$STORAGE_DIR/$SUBDIR/"
+LOCAL_ROOT="$STORAGE_DIR/"
 
 case "$MODE" in
   --dry-run) DRY_RUN=true ;;
@@ -31,7 +31,7 @@ case "$MODE" in
   *) echo "unknown mode: $MODE (use --dry-run or --execute)" >&2; exit 1 ;;
 esac
 
-# Build the list of paths relative to the synced folder; refuse anything outside it.
+# Build the list of paths relative to $STORAGE_DIR; refuse anything outside it.
 REL_LIST="$(mktemp)"
 trap 'rm -f "$REL_LIST"' EXIT
 while IFS= read -r path || [[ -n "$path" ]]; do
@@ -54,4 +54,4 @@ echo
 echo "=== S3 ==="
 RCLONE_FLAGS=(--config /tmp/rclone.conf --files-from-raw - -v)
 $DRY_RUN && RCLONE_FLAGS+=(--dry-run)
-docker exec -i "$CONTAINER" sh -c 'rclone delete "$RCLONE_REMOTE:$AWS_BUCKET/$SYNC_NAME" "$@"' _ "${RCLONE_FLAGS[@]}" < "$REL_LIST"
+docker exec -i "$CONTAINER" sh -c 'rclone delete "$RCLONE_REMOTE:$AWS_BUCKET" "$@"' _ "${RCLONE_FLAGS[@]}" < "$REL_LIST"

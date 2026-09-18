@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
-# Delete files listed in a text file (one absolute host path per line) both
-# locally and from the S3 backup written by the rclone-s3-sync container.
+# Delete files listed in a text file (one absolute host path per line) from
+# local storage. Every path must be under $STORAGE_DIR.
+# Use scripts/delete_files_s3.sh with the same list for the S3 backup.
 #
-# Local path  $STORAGE_DIR/$SUBDIR/<rel>  maps to  $RCLONE_REMOTE:$AWS_BUCKET/$SUBDIR/<rel>
-#
-# S3 deletes run inside the rclone_s3_sync container so they reuse its
-# generated /tmp/rclone.conf and env (RCLONE_REMOTE, AWS_BUCKET, SYNC_NAME).
 # Run this on the host (macOS), where the /Volumes/... paths exist.
 #
 # Usage:
-#   scripts/delete_files.sh to_delete.txt             # dry run (default)
-#   scripts/delete_files.sh to_delete.txt --execute   # really delete
+#   scripts/delete_files_local.sh to_delete.txt             # dry run (default)
+#   scripts/delete_files_local.sh to_delete.txt --execute   # really delete
 set -euo pipefail
 
 LIST_FILE="${1:?usage: $0 <list-file> [--execute]}"
 MODE="${2:---dry-run}"
-CONTAINER="rclone_s3_sync"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/.env"
 : "${STORAGE_DIR:?STORAGE_DIR not set in scripts/.env}"
 
-# Must match RCLONE_SYNC_SUBDIR of the container we exec into.
-SUBDIR="$(docker exec "$CONTAINER" sh -c 'printf %s "$SYNC_NAME"')"
-LOCAL_ROOT="$STORAGE_DIR/$SUBDIR/"
+LOCAL_ROOT="$STORAGE_DIR/"
 
 case "$MODE" in
   --dry-run) DRY_RUN=true ;;
@@ -31,7 +25,7 @@ case "$MODE" in
   *) echo "unknown mode: $MODE (use --dry-run or --execute)" >&2; exit 1 ;;
 esac
 
-# Build the list of paths relative to the synced folder; refuse anything outside it.
+# Build the list of paths relative to $STORAGE_DIR; refuse anything outside it.
 REL_LIST="$(mktemp)"
 trap 'rm -f "$REL_LIST"' EXIT
 while IFS= read -r path || [[ -n "$path" ]]; do
@@ -49,8 +43,6 @@ echo "Local root: $LOCAL_ROOT"
 echo
 
 # --- Local ------------------------------------------------------------------
-# Runs after S3 so a failed S3 step (set -e) leaves local files untouched.
-echo
 echo "=== Local ==="
 deleted=0; missing=0
 while IFS= read -r rel; do

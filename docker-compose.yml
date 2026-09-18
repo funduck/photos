@@ -6,9 +6,8 @@ services:
     image: ghcr.io/immich-app/immich-server:v3
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - $IMMICH_DIR/library:/data # Assets are stored separately on host
-      - $STORAGE_DIR/Photos:/mnt/media/library # Main library is stored in external drive
-      - $STORAGE_DIR2/Photos:/mnt/media/library2
+      - $IMMICH_DIR/library:/data # Assets are stored separately on host for performance
+      - $STORAGE_DIR:/mnt/media/library # External library
     environment:
       TZ: Asia/Tbilisi
       DB_PASSWORD: ${DB_PASSWORD}
@@ -84,9 +83,7 @@ services:
       - PGID=20
     volumes:
       - $IMMICH_DIR/syncthing-config:/var/syncthing/config
-      - $STORAGE_DIR/Test:/var/syncthing/Test
-      - $STORAGE_DIR/Photos:/var/syncthing/Photos
-      - $STORAGE_DIR2/Photos:/var/syncthing/Kate/Photos
+      - $STORAGE_DIR:/var/syncthing/data
     user: "503:20"
     ports:
       - "8385:8384"
@@ -104,11 +101,11 @@ services:
       RCLONE_SECRET_ACCESS_KEY: ${RCLONE_SECRET_ACCESS_KEY}
       AWS_BUCKET: ${AWS_BUCKET}
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      SYNC_NAME: ${RCLONE_SYNC_SUBDIR:-Photos}
+      SYNC_NAME: ${RCLONE_SYNC_NAME:-Photos}
       SYNC_INTERVAL: ${RCLONE_SYNC_INTERVAL:-24h}
       DRY_RUN: ${RCLONE_SYNC_DRY_RUN:-true}
     volumes:
-      - $STORAGE_DIR/${RCLONE_SYNC_SUBDIR:-Photos}:/data:ro
+      - $STORAGE_DIR:/data:ro
       - rclone_s3_sync:/state
     restart: unless-stopped
     user: "503:20"

@@ -4,7 +4,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env"
 
 src=$IMMICH_DIR/
-dst=$STORAGE_DIR/Immich/
+dst=$IMMICH_BACKUP_DIR/
 
 if [ ! -d "$dst" ]; then
     echo "Destination directory $dst does not exist. Creating."

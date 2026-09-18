@@ -15,7 +15,7 @@
 ## My Pipeline
 1. [syncthing](https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid&hl=en) running on your phone (Send Only) publishes media to your host.
 2. [syncthing](https://syncthing.net/) running on the host (Send & Receive) copies phone data to a temp folder — this happens regardless of whether the external drive or Docker is up
-3. a **second syncthing**, running as a container alongside Immich (Send & Receive), picks up from the temp folder and writes into `$STORAGE_DIR/Photos` on the external USB drive whenever the drive/Docker is available
+3. a **second syncthing**, running as a container alongside Immich (Receive Only), picks up from the temp folder and writes into `$STORAGE_DIR` (one subfolder per person/device, e.g. `Oleg/oleg-pixel`) on the external USB drive whenever the drive/Docker is available
 4. [Immich](https://immich.app/) is used to browse and edit the collection, reading from that same folder.
 5. **rclone** backs up the main storage to S3
 
@@ -31,7 +31,7 @@ flowchart LR
     P[Phone media] -. continuous send .-> T[Temp folder on host]
     T -. syncthing-in-docker .-> S[USB Drive]
     S -. rclone-in-docker .-> B[S3]
-    I[Immich assets and database] -. manually .-> S
+    I[Immich assets and database] -. manually .-> IB[Immich backup dir]
 ```
 
 A quick note, if you have internal drive big enough for your media - lucky you are! No need to have a temp folder on host, you can just point Immich to the internal drive and skip the second syncthing. But if you have a small internal drive and want to keep your media on an external drive, this setup is for you.
@@ -42,12 +42,12 @@ A quick note, if you have internal drive big enough for your media - lucky you a
 Three syncthing instances are involved:
 1. **Phone syncthing** (Send Only) — sends photos to the host's temp folder.
 2. **Host syncthing** (Send & Receive) — stores the phone media into a temp folder and relays further. This is the part that always works even if the external drive is unplugged or Docker is down.
-3. **Container syncthing** (Send & Receive) — syncs from that same temp folder into `$STORAGE_DIR/Photos`, the folder Immich reads. 
+3. **Container syncthing** (Receive Only) — syncs from that same temp folder into a subfolder of `$STORAGE_DIR`, the folder Immich reads and `rclone` backs up (to the bucket root, keeping the same relative paths). 
 
 Important: folder modes should be exactly as described above
 * on phone - "Send Only" because you don't want to transfer files **to** phone, and you don't want deletes to propagate back to phone
 * on host - "Send & Receive" because you want to receive from phone and send to container syncthing
-* on container - "Send & Receive" because you want to receive from host and send deletes back to host
+* on container - "Receive Only" because the drive is the destination: nothing changed on it (e.g. by Immich) should flow back to the host. "Ignore Delete" is also enabled on these folders, so clearing old files out of the host temp folder (see `scripts/delete_copied_files.sh`) doesn't delete them from the drive
 
 Nuance: connecting two syncthing instances on the *same host* over local discovery is flaky. Set an explicit LAN address (host IP + port, e.g. `tcp://127.0.0.1:22000`) on each side's device config instead of relying on auto-discovery — it connects reliably that way.
 
@@ -86,6 +86,12 @@ Once up, Immich is reachable at `https://$IMMICH_DOMAIN`. `immich-server`'s port
 ```
 docker compose up -d 
 ```
+
+### Backups
+* **Photos** (`$STORAGE_DIR`) go to S3 automatically through `rclone-s3-sync` (see [S3 setup](#s3-setup)).
+* **Immich data** (`$IMMICH_DIR`: uploads, thumbnails, Postgres, configs) is backed up manually with `scripts/backup_immich.sh` to `$IMMICH_BACKUP_DIR` (set in `scripts/.env`, e.g. a folder on the external drive). The script:
+  1. copies everything except `postgres-data` with `rsync --ignore-existing`, so files that already exist in the backup are not updated;
+  2. stops `immich_postgres` if it's running, copies `postgres-data` in full, and starts the database again.
 
 ## Duplicates Resolution
 Immich has a built-in functionality but when there are just too many duplicates with same names you can use `scripts/duplicate_resolver.py` to automatically delete these duplicates. 

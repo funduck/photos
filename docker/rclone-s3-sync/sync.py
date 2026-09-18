@@ -74,12 +74,12 @@ def write_last_sync(state_file: str, when: float) -> None:
         f.write(str(when))
 
 
-def run_sync(remote: str, bucket: str, sync_name: str, dry_run: bool) -> bool:
+def run_sync(remote: str, bucket: str, dry_run: bool) -> bool:
     global current_proc
 
     cmd = [
         "rclone", "copy",
-        "/data", f"{remote}:{bucket}/{sync_name}",
+        "/data", f"{remote}:{bucket}",
         "--config", RCLONE_CONF_PATH,
         "--s3-storage-class", "DEEP_ARCHIVE",
         "--size-only",
@@ -114,6 +114,7 @@ def main() -> None:
     bucket = require_env("AWS_BUCKET")
     region = os.environ.get("AWS_REGION", "us-east-1")
 
+    # Only names the state file; /data is always copied to the bucket root.
     sync_name = os.environ.get("SYNC_NAME", "Photos")
     interval = parse_duration(os.environ.get("SYNC_INTERVAL", "24h"))
     dry_run = os.environ.get("DRY_RUN", "true").lower() != "false"
@@ -138,7 +139,7 @@ def main() -> None:
 
         if elapsed >= interval:
             now = time.time()
-            succeeded = run_sync(remote, bucket, sync_name, dry_run)
+            succeeded = run_sync(remote, bucket, dry_run)
             if stop_event.is_set():
                 break
             if succeeded:
