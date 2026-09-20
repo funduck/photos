@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd unit for the ingest service. Copy to ~/Library/LaunchAgents/, edit the
+  paths, then:
+
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.funduck.photos-ingest.plist
+
+  A LaunchAgent, not a LaunchDaemon: the external drive is mounted in the user
+  session, and Full Disk Access prompts are resolvable for an agent.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.funduck.photos-ingest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/oleg/bin/photos-ingest</string>
+        <string>-config</string>
+        <string>/Users/oleg/Repos/Photos/services/ingest/config.yaml</string>
+        <!-- Harmless here: launchd gives the service /dev/null for stdin, which
+             is not a terminal, so the confirmation is skipped anyway. Explicit
+             is better than relying on that. -->
+        <string>-dont-ask</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Mandatory: launchd does not inherit your shell's PATH, so Homebrew's
+             ffmpeg is invisible without this. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>TZ</key>
+        <string>Asia/Tbilisi</string>
+        <!-- Consumed by ${STORAGE_DIR} in config.yaml. -->
+        <key>STORAGE_DIR</key>
+        <string>/Volumes/EXTDATA/Photos</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Keeps a two-hour transcode from making the desktop sluggish. Do NOT set
+         ProcessType to Background: that gets aggressively CPU-throttled, which
+         is exactly wrong for transcoding. -->
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <!-- kqueue costs a file descriptor per watched directory. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/oleg/Library/Logs/photos-ingest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/oleg/Library/Logs/photos-ingest.log</string>
+</dict>
+</plist>

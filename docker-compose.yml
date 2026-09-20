@@ -93,7 +93,7 @@ services:
 
   rclone-s3-sync:
     container_name: rclone_s3_sync
-    build: ./docker/rclone-s3-sync
+    build: ./services/rclone-s3-sync
     environment:
       TZ: Asia/Tbilisi
       RCLONE_REMOTE: ${RCLONE_REMOTE}
@@ -118,7 +118,7 @@ services:
     container_name: caddy
     image: caddy:2-alpine
     volumes:
-      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./services/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:

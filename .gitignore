@@ -3,3 +3,10 @@
 venv
 __pycache__
 *.log
+
+# ingest service
+services/ingest/bin/
+services/ingest/config.yaml
+*.db
+*.db-wal
+*.db-shm

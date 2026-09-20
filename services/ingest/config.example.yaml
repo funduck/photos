@@ -1,0 +1,136 @@
+# Ingest: watches the host syncthing temp folder, transcodes big videos, and
+# mirrors everything into $STORAGE_DIR (the folder Immich reads and rclone backs up).
+#
+# Runs as a host binary under launchd, not in Docker, so ffmpeg can reach
+# hevc_videotoolbox. Needs: brew install ffmpeg exiftool
+#
+# Copy to config.yaml and edit. Paths must be absolute. ${VAR} is expanded from
+# the environment, so `dest: ${STORAGE_DIR}` stays in step with the root .env
+# instead of becoming a third place to edit a path.
+#
+# dry_run is on by default: read a dry run's output, then turn it off.
+
+source: /Users/oleg/SyncPhones
+dest: ${STORAGE_DIR}
+dry_run: true
+
+# The drive must carry this marker file before anything is written. An unmounted
+# /Volumes/... leaves behind an empty, writable directory, so "the path exists"
+# proves nothing. Create it once:  touch "$STORAGE_DIR/.ingest-dest"
+# If it is missing, ingest says so and waits rather than exiting.
+dest_marker: .ingest-dest
+dest_wait: 30s
+
+workers: 2            # generic workers (probe + copy)
+transcode_workers: 1  # concurrent ffmpeg runs; VideoToolbox is one hardware
+                      # engine, so raising this splits the same throughput
+
+state:
+  # The DB lands in <dir>/<slug of source>/state.db, so a second source tree
+  # gets its own state automatically. Set `path:` to pin one exact file instead.
+  dir: /Users/oleg/Library/Application Support/photos-ingest
+
+  # On the first run, a source file whose destination copy already exists at the
+  # same size is recorded as done without being copied. Leave this on, or the
+  # first run re-ingests the entire library.
+  adopt_existing_dest: true
+
+  max_attempts: 5    # then the file is parked; see `ingest -report`
+  retry_backoff: 5m  # doubling each attempt...
+  retry_max: 6h      # ...up to here
+
+scan:
+  interval: 15m    # full rescan: the safety net, not the fast path
+  watch: true      # fsnotify; degrades to rescan-only if it cannot start
+  debounce: 5s     # quiet period after the last event for a path
+  settle: 10s      # a file's size must hold steady this long before it is touched
+  queue_size: 1024
+
+tools:
+  ffmpeg: ffmpeg      # under launchd, PATH must include /opt/homebrew/bin
+  ffprobe: ffprobe
+  exiftool: exiftool  # leave empty to skip the metadata pass entirely
+  timeout: 2h         # per external command
+
+ignore:
+  # Globs against the base name of any path component. An ignored directory
+  # hides everything beneath it: the walk never descends into it.
+  names:
+    - ".*"         # .stfolder, .stversions, .DS_Store, and our own sidecars
+    - ".ingest.*"  # redundant with .* — kept explicit so it survives a relaxed .*
+    - "*.tmp"      # ~syncthing~*.tmp, syncthing's in-progress downloads
+    - "@eaDir"     # Synology
+  paths: []        # globs against the whole source-relative path
+  min_size: 1      # skip zero-byte files
+
+transcode:
+  enabled: true
+
+  # Only two small files are ever written next to a source file, and only once
+  # the work is done: <prefix><name>.transcoded (empty) and <prefix><name>.failed
+  # (the error). State itself lives in the database.
+  #   find "$SRC" -name '.ingest.*.failed'    # what went wrong, and where
+  #   find "$SRC" -name '.ingest.*' -delete   # forget everything
+  # Partial data stays in the destination as <prefix><stem>.part<ext> (extension
+  # last, because ffmpeg picks the container from it) until it is renamed.
+  sidecar_prefix: ".ingest."
+
+  # -q:v is not a rate factor, so an already-efficient source can encode bigger.
+  # Keeping that would be strictly worse, so by default it is discarded and the
+  # original is copied instead.
+  keep_if_larger: false
+
+  # fallback: after max_attempts, copy the original rather than deliver nothing.
+  # fail:     park the file and leave the destination without it.
+  on_transcode_error: fallback
+
+  # warn: keep a good encode whose tag copy failed (what transcode-videos.sh does).
+  # fail: treat it as a failed transcode and apply on_transcode_error.
+  on_metadata_error: warn
+
+  rules:
+    # Ported from scripts/transcode-videos.sh, which is where these flags were
+    # validated. Videos below min_video_bitrate are copied through untouched —
+    # re-encoding them costs time and quality for almost no space.
+    - name: video-hevc
+      match:
+        extensions: [".mp4", ".mov"]  # case-insensitive
+        min_video_bitrate: 8000000    # 8 Mbps
+      ffmpeg_args:
+        - "-nostdin"
+        - "-v"
+        - "error"
+        - "-y"
+        - "-i"
+        - "{{.In}}"
+        - "-c:v"
+        - "hevc_videotoolbox"
+        - "-q:v"
+        - "65"          # 1..100, higher is better and bigger
+        - "-tag:v"
+        - "hvc1"
+        - "-fps_mode"
+        - "passthrough"
+        - "-c:a"
+        - "copy"
+        - "-map_metadata"
+        - "0"
+        - "-movflags"
+        - "use_metadata_tags+faststart"
+        - "{{.Out}}"
+      # Every tag except Rotation: ffmpeg has already rotated the pixels, and
+      # copying the tag back would rotate the video a second time.
+      exiftool_args:
+        - "-q"
+        - "-q"
+        - "-TagsFromFile"
+        - "{{.In}}"
+        - "-all:all"
+        - "--Rotation"
+        - "-overwrite_original"
+        - "{{.Out}}"
+      # Immich falls back to file mtime when the metadata carries no date.
+      preserve_mtime: true
+
+    # An image rule would slot in here with the same shape: its own extensions,
+    # match conditions and args. Not implemented yet.
