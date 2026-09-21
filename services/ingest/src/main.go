@@ -40,53 +40,109 @@ func main() {
 	}
 }
 
+// stringList collects a flag that may be repeated on the command line.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, " ") }
+
+func (l *stringList) Set(v string) error {
+	if v == "" {
+		return errors.New("empty path")
+	}
+	*l = append(*l, v)
+	return nil
+}
+
+// job is one source tree: its own config, state database and logger. Several
+// jobs run side by side in one process so that they share a single encode
+// limiter — see newEncodeLimiter.
+type job struct {
+	cfg   Config
+	store *Store
+	log   *slog.Logger
+}
+
 func run() error {
+	// One subcommand, dispatched before flag.Parse so that setup's flags and the
+	// daemon's cannot collide.
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		return runSetup(os.Args[2:])
+	}
+
+	var configPaths stringList
+	flag.Var(&configPaths, "config",
+		"path to a YAML config file; repeat it to ingest several source trees in one process")
 	var (
-		configPath = flag.String("config", "config.yaml", "path to the YAML config file")
-		once       = flag.Bool("once", false, "run a single pass and exit, instead of watching")
-		report     = flag.Bool("report", false, "print outstanding work and failures, then exit")
-		verbose    = flag.Bool("v", false, "with -report, list every planned file rather than just totals")
-		logLevel   = flag.String("log-level", "info", "debug, info, warn or error")
-		dryRun     = flag.String("dry-run", "", "override the config's dry_run (true or false)")
-		dontAsk    = flag.Bool("dont-ask", false,
+		once     = flag.Bool("once", false, "run a single pass and exit, instead of watching")
+		report   = flag.Bool("report", false, "print outstanding work and failures, then exit")
+		verbose  = flag.Bool("v", false, "with -report, list every planned file rather than just totals")
+		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
+		dryRun   = flag.String("dry-run", "", "override every config's dry_run (true or false)")
+		dontAsk  = flag.Bool("dont-ask", false,
 			"skip the confirmation prompt; implied when stdin is not a terminal")
 		stopBefore = flag.Bool("stop-before-action", false,
 			"scan and record every file as pending, but copy or transcode nothing; a later regular run drains the queue")
 	)
 	flag.Parse()
 
-	cfg, err := LoadConfig(*configPath)
-	if err != nil {
-		return err
+	if len(configPaths) == 0 {
+		configPaths = stringList{"config.yaml"}
 	}
+	dryRunSet, dryRunVal := false, false
 	if *dryRun != "" {
-		v, perr := parseBool(*dryRun)
-		if perr != nil {
-			return fmt.Errorf("-dry-run: %w", perr)
+		v, err := parseBool(*dryRun)
+		if err != nil {
+			return fmt.Errorf("-dry-run: %w", err)
 		}
-		cfg.DryRun = v
-	}
-	cfg.StopBeforeAction = *stopBefore
-	cfg.DontAsk = *dontAsk
-	if cfg.StopBeforeAction && cfg.DryRun {
-		// One writes nothing at all, the other writes rows on purpose.
-		return errors.New("-stop-before-action needs -dry-run=false: a dry run records nothing")
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
+		dryRunSet, dryRunVal = true, v
 	}
 
 	log := newLogger(*logLevel)
 
-	dbPath, err := StateDBPath(cfg.State, cfg.Source)
-	if err != nil {
+	var jobs []job
+	// Named so every store opened before a later config failed still closes.
+	defer func() {
+		for _, j := range jobs {
+			j.store.Close()
+		}
+	}()
+
+	for _, path := range configPaths {
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			return err
+		}
+		if dryRunSet {
+			cfg.DryRun = dryRunVal
+		}
+		cfg.StopBeforeAction = *stopBefore
+		cfg.DontAsk = *dontAsk
+		if cfg.StopBeforeAction && cfg.DryRun {
+			// One writes nothing at all, the other writes rows on purpose.
+			return fmt.Errorf("%s: -stop-before-action needs -dry-run=false: a dry run records nothing", cfg.Name)
+		}
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("%s: %w", cfg.Name, err)
+		}
+
+		dbPath, err := StateDBPath(cfg.State, cfg.Source)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cfg.Name, err)
+		}
+		store, err := OpenStore(dbPath)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cfg.Name, err)
+		}
+		jobs = append(jobs, job{cfg: cfg, store: store, log: log.With("job", cfg.Name)})
+	}
+
+	cfgs := make([]Config, len(jobs))
+	for i, j := range jobs {
+		cfgs[i] = j.cfg
+	}
+	if err := ValidateJobs(cfgs); err != nil {
 		return err
 	}
-	store, err := OpenStore(dbPath)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -99,88 +155,140 @@ func run() error {
 	}()
 
 	if *report {
-		return printReport(ctx, store, *verbose)
+		return printReport(ctx, jobs, *verbose)
 	}
-	return serve(ctx, cfg, store, log, *once)
+	return serveAll(ctx, jobs, newEncodeLimiter(jobs, log), log, *once)
 }
 
-func serve(ctx context.Context, cfg Config, store *Store, log *slog.Logger, once bool) error {
-	filter, err := NewFilter(cfg.Ignore)
-	if err != nil {
-		return err
-	}
-
-	queue := NewQueue(cfg.Scan.QueueSize)
-	scanner := NewScanner(cfg.Source, filter, queue, log)
-	transcoder := NewTranscoder(cfg.Transcode, cfg.Tools, NewExecRunner(cfg.Tools.Timeout.D()), log)
-	pipeline := NewPipeline(cfg, store, filter, transcoder, log)
-
-	logBanner(ctx, cfg, store, log, once)
-
-	// Before the sweep, which deletes files, and before any work.
-	if err := confirm(ctx, cfg, store, once, log); err != nil {
-		return err
-	}
-
-	if !cfg.DryRun {
-		// Anything half-written belongs to a run that died; nothing is running
-		// yet, so all of it is safe to clear. The destination is swept too:
-		// that is where an interrupted encode leaves real bytes behind.
-		for _, root := range []string{cfg.Source, cfg.Dest} {
-			n, err := Sweep(root, cfg.Transcode.SidecarPrefix)
-			if err != nil {
-				log.Warn("sweep failed", "root", root, "err", err)
-			} else if n > 0 {
-				log.Info("cleared interrupted work", "root", root, "count", n)
-			}
+// newEncodeLimiter builds the one semaphore every job's transcode step passes
+// through. VideoToolbox is a single hardware engine, so the limit has to be
+// process-wide: running a second agent per source tree — the obvious way to
+// ingest two trees — would quietly double the number of concurrent encodes,
+// each config still believing its transcode_workers: 1 was being honoured.
+//
+// When the configs disagree the smallest wins. It is the only choice that can
+// never over-subscribe the encoder, and it needs no config edit to be right.
+func newEncodeLimiter(jobs []job, log *slog.Logger) chan struct{} {
+	n := jobs[0].cfg.TranscodeWorkers
+	differ := false
+	for _, j := range jobs[1:] {
+		if j.cfg.TranscodeWorkers != n {
+			differ = true
+		}
+		if j.cfg.TranscodeWorkers < n {
+			n = j.cfg.TranscodeWorkers
 		}
 	}
+	if differ {
+		log.Warn("configs disagree on transcode_workers; the limit is shared by every job, so the smallest wins",
+			"transcode_workers", n)
+	}
+	return make(chan struct{}, n)
+}
 
-	if err := waitForDest(ctx, cfg, log); err != nil {
+func serveAll(ctx context.Context, jobs []job, encode chan struct{}, log *slog.Logger, once bool) error {
+	logBanner(ctx, jobs, encode, log, once)
+
+	// Before the sweeps, which delete files, and before any work.
+	if err := confirm(ctx, jobs, once, log); err != nil {
 		return err
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
-	for i := 0; i < cfg.Workers; i++ {
-		g.Go(func() error {
-			for {
-				rel, ok := queue.Next(gctx)
-				if !ok {
-					return nil
-				}
-				pipeline.Process(gctx, rel)
-				queue.Done(rel)
-			}
-		})
-	}
-
-	if once {
-		if err := scanner.Scan(gctx); err != nil && gctx.Err() == nil {
+	pipelines := make([]*Pipeline, len(jobs))
+	for i, j := range jobs {
+		p, err := startJob(gctx, g, j, encode, once)
+		if err != nil {
 			return err
 		}
-		// Workers drain what is queued, then Next returns on the closed channel.
-		queue.Close()
-		err := g.Wait()
-		return finish(ctx, pipeline, log, err)
+		pipelines[i] = p
 	}
 
-	g.Go(func() error { return rescanLoop(gctx, cfg, scanner, log) })
-
-	if cfg.Scan.Watch {
-		watcher, werr := NewWatcher(cfg.Source, filter, queue, cfg.Scan.Debounce.D(), log)
-		if werr != nil {
-			// Not fatal: the rescan alone is correct, just slower.
-			log.Warn("could not start the watcher, falling back to periodic rescans", "err", werr)
-		} else {
-			g.Go(func() error { return watcher.Run(gctx) })
-		}
-	}
-
-	err = g.Wait()
+	err := g.Wait()
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	return finish(ctx, pipeline, log, err)
+	return finish(ctx, jobs, pipelines, log, err)
+}
+
+// startJob wires up one source tree and launches it on g. Everything that can
+// block — waiting for the drive, scanning, encoding — happens on the group, so
+// a job whose destination is unmounted never holds up the others.
+func startJob(ctx context.Context, g *errgroup.Group, j job, encode chan struct{}, once bool) (*Pipeline, error) {
+	filter, err := NewFilter(j.cfg.Ignore)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", j.cfg.Name, err)
+	}
+
+	queue := NewQueue(j.cfg.Scan.QueueSize)
+	scanner := NewScanner(j.cfg.Source, filter, queue, j.log)
+	transcoder := NewTranscoder(j.cfg.Transcode, j.cfg.Tools, NewExecRunner(j.cfg.Tools.Timeout.D()), j.log)
+	pipeline := NewPipeline(j.cfg, j.store, filter, transcoder, encode, j.log)
+
+	g.Go(func() error {
+		if !j.cfg.DryRun {
+			// Anything half-written belongs to a run that died; nothing is
+			// running yet, so all of it is safe to clear. The destination is
+			// swept too: that is where an interrupted encode leaves real bytes.
+			for _, root := range []string{j.cfg.Source, j.cfg.Dest} {
+				n, err := Sweep(root, j.cfg.Transcode.SidecarPrefix)
+				if err != nil {
+					j.log.Warn("sweep failed", "root", root, "err", err)
+				} else if n > 0 {
+					j.log.Info("cleared interrupted work", "root", root, "count", n)
+				}
+			}
+		}
+
+		if err := waitForDest(ctx, j.cfg, j.log); err != nil {
+			return err
+		}
+
+		wg, wctx := errgroup.WithContext(ctx)
+		for i := 0; i < j.cfg.Workers; i++ {
+			wg.Go(func() error {
+				for {
+					rel, ok := queue.Next(wctx)
+					if !ok {
+						return nil
+					}
+					pipeline.Process(wctx, rel)
+					queue.Done(rel)
+				}
+			})
+		}
+
+		if once {
+			// Workers drain what is queued, then Next returns on the closed
+			// channel. The close has to happen even on a failed scan, or they
+			// would block forever waiting for work that is not coming.
+			serr := scanner.Scan(wctx)
+			queue.Close()
+			if werr := wg.Wait(); werr != nil {
+				return werr
+			}
+			if serr != nil && wctx.Err() == nil {
+				return serr
+			}
+			return nil
+		}
+
+		wg.Go(func() error { return rescanLoop(wctx, j.cfg, scanner, j.log) })
+
+		if j.cfg.Scan.Watch {
+			watcher, werr := NewWatcher(j.cfg.Source, filter, queue, j.cfg.Scan.Debounce.D(), j.log)
+			if werr != nil {
+				// Not fatal: the rescan alone is correct, just slower.
+				j.log.Warn("could not start the watcher, falling back to periodic rescans", "err", werr)
+			} else {
+				wg.Go(func() error { return watcher.Run(wctx) })
+			}
+		}
+
+		return wg.Wait()
+	})
+
+	return pipeline, nil
 }
 
 // rescanLoop runs the full walk immediately and then on every interval. It is
@@ -260,8 +368,20 @@ destination not ready: %v
 // only when stdin is a terminal. That last part is the important one: under
 // launchd there is nobody to answer, so a prompt would block forever and the
 // service would hang, be restarted, and hang again.
-func confirm(ctx context.Context, cfg Config, store *Store, once bool, log *slog.Logger) error {
-	if cfg.DontAsk || cfg.DryRun {
+//
+// One prompt covers every job: the question is whether this process should run,
+// not whether each tree should.
+func confirm(ctx context.Context, jobs []job, once bool, log *slog.Logger) error {
+	writes := false
+	for _, j := range jobs {
+		if j.cfg.DontAsk {
+			return nil
+		}
+		if !j.cfg.DryRun {
+			writes = true
+		}
+	}
+	if !writes {
 		return nil
 	}
 	if !isTerminal(os.Stdin) {
@@ -269,22 +389,17 @@ func confirm(ctx context.Context, cfg Config, store *Store, once bool, log *slog
 		return nil
 	}
 
-	mode := "watch the source and process continuously"
-	switch {
-	case cfg.StopBeforeAction:
-		mode = "record what needs doing, then stop (no files written)"
-	case once:
-		mode = "process everything once, then exit"
+	fmt.Fprintln(os.Stderr, "\nabout to run, for real — this writes to the destination")
+	for _, j := range jobs {
+		fmt.Fprintf(os.Stderr, `
+  %s
+    from:     %s
+    to:       %s
+    state:    %s
+    plan:     %s
+    encoding: %s
+`, j.cfg.Name, j.cfg.Source, j.cfg.Dest, j.store.Path(), planSummary(j.cfg, once), encodingSummary(j.cfg))
 	}
-
-	fmt.Fprintf(os.Stderr, `
-about to run, for real — this writes to the destination
-  from:     %s
-  to:       %s
-  state:    %s
-  plan:     %s
-  encoding: %s
-`, cfg.Source, cfg.Dest, store.Path(), mode, encodingSummary(cfg))
 
 	fmt.Fprint(os.Stderr, "\ncontinue? [y/N] ")
 
@@ -317,6 +432,19 @@ about to run, for real — this writes to the destination
 	}
 }
 
+func planSummary(cfg Config, once bool) string {
+	switch {
+	case cfg.DryRun:
+		return "dry run — nothing is written"
+	case cfg.StopBeforeAction:
+		return "record what needs doing, then stop (no files written)"
+	case once:
+		return "process everything once, then exit"
+	default:
+		return "watch the source and process continuously"
+	}
+}
+
 func encodingSummary(cfg Config) string {
 	if !cfg.Transcode.Enabled {
 		return "off — every file is copied unchanged"
@@ -340,56 +468,100 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-// finish prints the run summary and turns a failed file into a non-zero exit,
-// so a -once test run is scriptable.
-func finish(ctx context.Context, p *Pipeline, log *slog.Logger, err error) error {
-	s := p.Stats().Snapshot()
+// finish prints the per-job summaries plus a total, and turns a failed file
+// into a non-zero exit, so a -once test run is scriptable.
+func finish(ctx context.Context, jobs []job, pipelines []*Pipeline, log *slog.Logger, err error) error {
+	var total StatsSnapshot
+	failed := 0
+	for i, p := range pipelines {
+		s := p.Stats().Snapshot()
+		total = total.plus(s)
+		failed += s.Failed
+		if ctx.Err() != nil {
+			jobs[i].log.Info("interrupted", s.LogArgs()...)
+		} else {
+			jobs[i].log.Info("job complete", s.LogArgs()...)
+		}
+	}
+
 	if ctx.Err() != nil {
-		log.Info("interrupted", s.LogArgs()...)
+		log.Info("interrupted", total.LogArgs()...)
 		return nil
 	}
-	log.Info("run complete", s.LogArgs()...)
+	if len(pipelines) > 1 {
+		log.Info("run complete", total.LogArgs()...)
+	}
 	if err != nil {
 		return err
 	}
-	if s.Failed > 0 {
-		return fmt.Errorf("%d file(s) failed to ingest", s.Failed)
+	if failed > 0 {
+		return fmt.Errorf("%d file(s) failed to ingest", failed)
 	}
 	return nil
 }
 
-func logBanner(ctx context.Context, cfg Config, store *Store, log *slog.Logger, once bool) {
+func logBanner(ctx context.Context, jobs []job, encode chan struct{}, log *slog.Logger, once bool) {
 	mode := "watch"
 	if once {
 		mode = "once"
 	}
-	log.Info("starting",
-		"mode", mode, "dry_run", cfg.DryRun, "stop_before_action", cfg.StopBeforeAction,
-		"source", cfg.Source, "dest", cfg.Dest,
-		"state_db", store.Path(),
-		"workers", cfg.Workers, "transcode_workers", cfg.TranscodeWorkers,
-		"scan_interval", cfg.Scan.Interval.D(), "watch", cfg.Scan.Watch)
+	// transcode_workers is logged here rather than per job because it is now a
+	// property of the process: one hardware encoder, one shared limit.
+	log.Info("starting", "mode", mode, "jobs", len(jobs), "transcode_workers", cap(encode))
 
 	// Log the encoder version: launchd does not inherit a shell PATH, and a
 	// missing Homebrew ffmpeg is by far the most likely deployment failure.
-	if res, err := NewExecRunner(30*time.Second).Run(ctx, cfg.Tools.FFmpeg, []string{"-version"}); err == nil {
-		log.Info("ffmpeg", "version", firstLine(res.Stdout))
+	// Once per distinct binary — the configs almost always name the same one.
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		if seen[j.cfg.Tools.FFmpeg] {
+			continue
+		}
+		seen[j.cfg.Tools.FFmpeg] = true
+		if res, err := NewExecRunner(30*time.Second).Run(ctx, j.cfg.Tools.FFmpeg, []string{"-version"}); err == nil {
+			log.Info("ffmpeg", "path", j.cfg.Tools.FFmpeg, "version", firstLine(res.Stdout))
+		}
 	}
 
-	if counts, err := store.Counts(ctx); err == nil && len(counts) > 0 {
-		args := make([]any, 0, len(counts)*2)
-		for _, k := range []string{StatusDone, StatusPending, StatusFailed, StatusFailedPermanent} {
-			if n, ok := counts[k]; ok {
-				args = append(args, k, n)
+	for _, j := range jobs {
+		j.log.Info("job",
+			"dry_run", j.cfg.DryRun, "stop_before_action", j.cfg.StopBeforeAction,
+			"source", j.cfg.Source, "dest", j.cfg.Dest,
+			"state_db", j.store.Path(),
+			"workers", j.cfg.Workers,
+			"scan_interval", j.cfg.Scan.Interval.D(), "watch", j.cfg.Scan.Watch)
+
+		if counts, err := j.store.Counts(ctx); err == nil && len(counts) > 0 {
+			args := make([]any, 0, len(counts)*2)
+			for _, k := range []string{StatusDone, StatusPending, StatusFailed, StatusFailedPermanent} {
+				if n, ok := counts[k]; ok {
+					args = append(args, k, n)
+				}
 			}
+			j.log.Info("state", args...)
 		}
-		log.Info("state", args...)
 	}
 }
 
 // printReport shows what is outstanding: work an inventory run has planned but
-// not yet done, and anything that failed.
-func printReport(ctx context.Context, store *Store, verbose bool) error {
+// not yet done, and anything that failed. With several jobs each gets its own
+// section, since the two trees have nothing to do with each other.
+func printReport(ctx context.Context, jobs []job, verbose bool) error {
+	for _, j := range jobs {
+		if len(jobs) > 1 {
+			fmt.Printf("== %s ==\n\n", j.cfg.Name)
+		}
+		if err := reportJob(ctx, j.store, verbose); err != nil {
+			return fmt.Errorf("%s: %w", j.cfg.Name, err)
+		}
+		if len(jobs) > 1 {
+			fmt.Println()
+		}
+	}
+	return nil
+}
+
+func reportJob(ctx context.Context, store *Store, verbose bool) error {
 	pending, err := store.Pending(ctx)
 	if err != nil {
 		return err

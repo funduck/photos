@@ -39,6 +39,21 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	return s.snap
 }
 
+// plus totals two snapshots, for the run summary across several jobs.
+func (s StatsSnapshot) plus(o StatsSnapshot) StatsSnapshot {
+	s.Transcoded += o.Transcoded
+	s.Copied += o.Copied
+	s.Adopted += o.Adopted
+	s.Skipped += o.Skipped
+	s.Pending += o.Pending
+	s.Failed += o.Failed
+	s.PlanTranscode += o.PlanTranscode
+	s.PlanCopy += o.PlanCopy
+	s.BytesIn += o.BytesIn
+	s.BytesOut += o.BytesOut
+	return s
+}
+
 func (s StatsSnapshot) LogArgs() []any {
 	args := []any{
 		"transcoded", s.Transcoded, "copied", s.Copied, "adopted", s.Adopted,
@@ -63,14 +78,18 @@ type Pipeline struct {
 	// sema bounds concurrent ffmpeg runs independently of the worker count:
 	// VideoToolbox is a single hardware engine, so a second encode splits the
 	// same throughput while a second copy does not.
+	//
+	// It is owned by the caller and shared by every job in the process. A
+	// per-pipeline semaphore would be a lie as soon as a second source tree was
+	// configured: two jobs would each run one encode, believing they were alone.
 	sema chan struct{}
 }
 
-func NewPipeline(cfg Config, store *Store, filter *Filter, tr *Transcoder, log *slog.Logger) *Pipeline {
+func NewPipeline(cfg Config, store *Store, filter *Filter, tr *Transcoder, encode chan struct{}, log *slog.Logger) *Pipeline {
 	return &Pipeline{
 		cfg: cfg, store: store, filter: filter, tr: tr, log: log,
 		stats: &Stats{},
-		sema:  make(chan struct{}, cfg.TranscodeWorkers),
+		sema:  encode,
 	}
 }
 

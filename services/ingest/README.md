@@ -4,10 +4,10 @@ Watches a source directory, transcodes large videos, and mirrors the result into
 destination directory — remembering what it has already done, so nothing is ever
 copied twice.
 
-It is the eventual replacement for the **container syncthing** hop in this repo's
-pipeline (host temp folder → `$STORAGE_DIR` on the external drive). Until the cutover
-is done, both run side by side: `syncthing` stays in `docker-compose.yml` and ingest is
-verified in dry-run alongside it.
+It has replaced the **container syncthing** hop in this repo's pipeline (host temp
+folder → `$STORAGE_DIR` on the external drive). That service is commented out in
+`docker-compose.yml` rather than deleted, as a fallback; the host-side syncthing that
+receives from the phones is untouched and still feeds the temp folder.
 
 Unlike everything else here, ingest is **not** a container. It runs as a host binary
 under launchd, because `hevc_videotoolbox` — Apple's hardware HEVC encoder, which is
@@ -90,8 +90,12 @@ re-copy, and no content hash, because reading every byte on every scan is not wo
 This is what lets you **delete files from the destination** (or from the source) without
 them coming back on the next scan — which is the whole point of the service.
 
-The DB lives at `<state.dir>/<slug of the source path>/state.db`, so pointing a second
-instance at a different source tree gets its own state automatically.
+`ingest setup` puts the DB at `<source>/.ingest/state.db`, beside the config and the
+tree it describes. A config can instead set `state.dir`, in which case the DB lands at
+`<state.dir>/<slug of the source path>/state.db` — a second source tree still gets its
+own state, and several configs can share one `state.dir`. Two configs that resolve to
+the same file are refused at startup: SQLite's WAL would let them interleave rather
+than fail, which is the worst of both.
 
 **Adoption**: a source file whose destination counterpart already exists is recorded as
 `adopted` without being copied. Without this, a first run — or any run after the state
@@ -119,34 +123,107 @@ run and waits for it.
 brew install ffmpeg exiftool          # ffprobe comes with ffmpeg
 
 cd services/ingest
-go build -trimpath -o bin/ingest ./src
-cp bin/ingest ~/bin/photos-ingest     # out of the repo, so rebuilds don't swap it live
-
-cp config.example.yaml config.yaml    # then edit: source, dest
-touch "$STORAGE_DIR/.ingest-dest"     # with the external drive mounted
+make check                            # fmt + vet + test
+make config                           # interview: writes <source>/.ingest/config.yaml
+make install                          # build, install ~/Library/Scripts/photos-ingest
 ```
+
+`make config` runs `ingest setup`, which asks for the source and destination —
+defaulting the destination to `STORAGE_DIR` from the repo-root `.env` — and then
+writes the config, creates the `.ingest-dest` marker, and adds `/.ingest` to the
+source's `.stignore` if it is a syncthing folder. Every answer also has a flag,
+and a flag that is passed is not asked about:
+
+```bash
+make config ARGS='-source ~/SyncPhones'              # asks about the rest
+make config ARGS='-source ~/SyncPhones -dest /Volumes/EXTDATA/Photos -yes'
+make config ARGS='-source ~/SyncPhones -force'       # overwrite an existing config
+```
+
+The binary is installed out of the repo on purpose, so a rebuild never swaps the
+file launchd is running. `make` on its own lists every target; `./launchd.sh
+bin-path`, `agent-path` and `log-path` print where things go, and `INGEST_BIN`,
+`INGEST_LOG`, `INGEST_AGENT_DIR` and `INGEST_TZ` override them.
+
+Without make:
+
+```bash
+go build -trimpath -o bin/ingest ./src
+./bin/ingest setup -source ~/SyncPhones
+cp bin/ingest ~/Library/Scripts/photos-ingest
+```
+
+### Where the config and the database live
+
+Both go in `<source>/.ingest/`, so a source tree is self-contained: point the
+binary at it and everything it needs is already there. Writing into the source
+looks wrong at first glance, but the scanner never sees it — the default ignore
+list matches both `.*` and `.ingest*`, and an ignored directory is never
+descended into. The sweep matches the sidecar prefix `.ingest.`, *with* the
+trailing dot, so the `.ingest` directory is never a candidate for deletion.
+
+The two ignore rules overlap on purpose. `.*` is the one somebody might relax —
+wanting hidden files ingested is a reasonable thing to want — so `.ingest*` is
+the backstop that still keeps ingest's own config and database out of the
+library. Note that these are globs, not regexes: the dot is literal, which is
+why the pattern is `.ingest*` and not `.ingest.*` — the latter matches the
+sidecars but not the directory.
+
+The one real hazard is syncthing, which would treat a live SQLite database as
+content and push it out to every phone sharing the folder. That is what the
+`.stignore` entry is for, and why setup asks whether the source is a syncthing
+folder.
 
 ## Run
 
 ```bash
-photos-ingest -config config.yaml -once              # one pass, then exit (dry-run by default)
-photos-ingest -config config.yaml -once -dry-run=false   # one real pass
-photos-ingest -config config.yaml                    # daemon: watch + periodic rescan
-photos-ingest -config config.yaml -report            # list failures and exit
-photos-ingest -config config.yaml -once -stop-before-action   # inventory only
-photos-ingest -config config.yaml -once -dont-ask    # skip the confirmation
+CFG=~/SyncPhones/.ingest/config.yaml
+
+photos-ingest -config $CFG -once              # one pass, then exit (dry-run by default)
+photos-ingest -config $CFG -once -dry-run=false   # one real pass
+photos-ingest -config $CFG                    # daemon: watch + periodic rescan
+photos-ingest -config $CFG -report            # list failures and exit
+photos-ingest -config $CFG -once -stop-before-action   # inventory only
+photos-ingest -config $CFG -once -dont-ask    # skip the confirmation
 ```
 
+### Several source trees
+
+Different trees often want different rules, destinations and state. Write one config
+file each and repeat `-config`:
+
+```bash
+photos-ingest -config ~/SyncPhones/.ingest/config.yaml -config ~/Cameras/.ingest/config.yaml
+```
+
+Each config becomes a **job** with its own filter, queue, scanner, state DB and
+pipeline, and they run concurrently — a plain copy in one tree proceeds while the
+other transcodes. Every log line carries `job=<name>`, taken from the config's `name:`
+or its file name.
+
+Run them as two processes instead and the encoder budget breaks: `transcode_workers`
+is an in-process limit, so two agents each honouring `transcode_workers: 1` still put
+two encodes on VideoToolbox — the one hardware engine the setting exists to protect.
+In one process the limit is shared, and when the configs disagree the smallest wins
+(logged at startup). That is the whole reason `-config` repeats rather than the agent
+being installed twice — and why the LaunchAgent takes a list of source trees rather
+than being installed once per tree.
+
+Startup refuses the collisions that only arise here: two jobs with the same name,
+overlapping source/dest trees, or a shared state database.
+
 Before writing anything, ingest prints what it is about to do — source, destination,
-state DB, plan, encoding rules — and waits for a `y`:
+state DB, plan, encoding rules — and waits for a `y`. One prompt covers every job:
 
 ```
 about to run, for real — this writes to the destination
-  from:     /Users/oleg/SyncPhones
-  to:       /Volumes/EXTDATA/Photos
-  state:    /Users/oleg/Library/Application Support/photos-ingest/.../state.db
-  plan:     watch the source and process continuously
-  encoding: video-hevc (.mp4 .mov above 8 Mbps)
+
+  phones
+    from:     /Users/oleg/SyncPhones
+    to:       /Volumes/EXTDATA/Photos
+    state:    /Users/oleg/SyncPhones/.ingest/state.db
+    plan:     watch the source and process continuously
+    encoding: video-hevc (.mp4 .mov above 8 Mbps)
 
 continue? [y/N]
 ```
@@ -189,7 +266,7 @@ stays `done`.
 Read the plan back at any time with `-report`:
 
 ```
-$ photos-ingest -config config.yaml -report
+$ photos-ingest -config $CFG -report
 pending work
   copy            2 files      2.8 MB
   transcode       1 files      2.9 MB
@@ -199,7 +276,7 @@ pending work
 Add `-v` to list the files themselves, grouped by planned action and largest first:
 
 ```
-$ photos-ingest -config config.yaml -report -v
+$ photos-ingest -config $CFG -report -v
 pending work
   transcode       2 files      7.6 MB
   copy            2 files      2.8 MB
@@ -228,13 +305,32 @@ creation dates, GPS, camera model, duration and dimensions:
 ### launchd
 
 ```bash
-cp com.funduck.photos-ingest.plist ~/Library/LaunchAgents/
-# edit the paths inside, then:
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.funduck.photos-ingest.plist
-launchctl kickstart -k gui/$(id -u)/com.funduck.photos-ingest   # restart after a change
-launchctl print gui/$(id -u)/com.funduck.photos-ingest          # status
-launchctl bootout gui/$(id -u)/com.funduck.photos-ingest        # stop and unload
+make install-plist SOURCES=~/SyncPhones   # write the LaunchAgent and load it
+make install-plist                        # again: reuses the same sources
+make restart         # after a rebuild or a config change
+make status          # launchctl print
+make logs            # tail -f the log
+make unload          # stop and unload
 ```
+
+Everything launchd lives in `launchd.sh`; the Makefile only calls it. There is no
+plist template and no substitution pass — the script writes the plist from a
+heredoc, `plutil -lint`s it, and refuses to install one that does not pass. It
+needs no `STORAGE_DIR`, because the generated config carries the resolved
+destination path rather than `${STORAGE_DIR}`.
+
+`SOURCES` is a list of **source directories**; each becomes one
+`-config <src>/.ingest/config.yaml`, so several trees run as jobs in a single
+process:
+
+```bash
+make install-plist SOURCES='~/SyncPhones ~/Cameras'
+```
+
+With no `SOURCES` the script reads the sources back out of the plist it installed
+last time, which makes a reload after a rebuild a bare `make install-plist`. It
+unloads any previous version first, so it is always safe to re-run. The
+equivalent by hand is `launchctl bootstrap gui/$(id -u) <plist>`.
 
 It is a LaunchAgent, not a LaunchDaemon: the external drive is mounted in the user
 session. The plist must set `PATH` explicitly — launchd does not inherit your shell's,
@@ -266,14 +362,18 @@ See `config.example.yaml` — every key is commented there. The settings worth k
 | `dry_run` | `true` | flip once you have read a dry run's output |
 | `scan.interval` | `15m` | full rescan; the watcher is the fast path, this is the net |
 | `scan.settle` | `10s` | size must hold steady this long before a file is touched; a file untouched for longer than this skips the wait entirely |
-| `workers` | `2` | generic workers (probe + copy) |
-| `transcode_workers` | `1` | concurrent ffmpeg runs — VideoToolbox is one hardware engine, raising this splits the same throughput |
+| `name` | the file's base name | tags this tree's log lines; must be distinct across configs |
+| `workers` | `2` | generic workers (probe + copy), per source tree |
+| `transcode_workers` | `1` | concurrent ffmpeg runs — VideoToolbox is one hardware engine, raising this splits the same throughput. Process-wide: shared by every `-config`, smallest wins |
 | `transcode.on_transcode_error` | `fallback` | `fallback` copies the original after `max_attempts`; `fail` parks the file |
 | `transcode.on_metadata_error` | `warn` | `warn` keeps the transcode without full metadata; `fail` treats it as a transcode failure |
 | `transcode.keep_if_larger` | `false` | discard an encode that came out bigger and copy the original |
 
-`${VAR}` in the config is expanded from the environment, so `dest: ${STORAGE_DIR}` stays
-in lockstep with the root `.env` instead of becoming a third place to edit a path.
+`${VAR}` in a config is expanded from the environment, so a hand-written `dest:
+${STORAGE_DIR}` stays in lockstep with the root `.env`. `ingest setup` resolves the
+paths up front and writes them literally instead — that is what lets the LaunchAgent
+carry no environment of its own, at the cost of re-running setup (or editing one line)
+if `STORAGE_DIR` ever moves.
 
 ## Tests
 
@@ -282,8 +382,9 @@ go test ./src/...
 ```
 
 Covers the filtering rules, config parsing and validation, the state key and retry
-logic, and the transcode decision branches (through a fake command runner, so no ffmpeg
-is needed).
+logic, the transcode decision branches (through a fake command runner, so no ffmpeg is
+needed), and `ingest setup` — the generated config is loaded and validated by the same
+code the daemon uses, so what users actually get is what is tested.
 
 ## Not implemented yet
 

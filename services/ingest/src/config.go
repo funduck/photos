@@ -37,6 +37,11 @@ const (
 )
 
 type Config struct {
+	// Name labels this source tree in the logs and in error messages. Several
+	// configs run side by side in one process, so every line needs to say which
+	// tree it came from. Defaults to the config file's base name.
+	Name string `yaml:"name"`
+
 	Source string `yaml:"source"`
 	Dest   string `yaml:"dest"`
 	DryRun bool   `yaml:"dry_run"`
@@ -149,7 +154,7 @@ func defaultConfig() Config {
 			Timeout:  Duration(2 * time.Hour),
 		},
 		Ignore: IgnoreConfig{
-			Names:   []string{".*", ".ingest.*", "*.tmp", "@eaDir"},
+			Names:   []string{".*", ".ingest*", "*.tmp", "@eaDir"},
 			MinSize: 1,
 		},
 		Transcode: TranscodeConfig{
@@ -176,7 +181,56 @@ func LoadConfig(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
+	if cfg.Name == "" {
+		base := filepath.Base(path)
+		cfg.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	}
 	return cfg, nil
+}
+
+// ValidateJobs checks what only becomes wrong once several configs share one
+// process. Each config has already passed Validate on its own; none of these
+// collisions are visible from inside a single one.
+func ValidateJobs(cfgs []Config) error {
+	seen := make(map[string]bool, len(cfgs))
+	paths := make([]string, len(cfgs))
+	for i, c := range cfgs {
+		if seen[c.Name] {
+			return fmt.Errorf("two configs are both named %q: the name tags the logs, so set an explicit name: in one of them", c.Name)
+		}
+		seen[c.Name] = true
+
+		p, err := StateDBPath(c.State, c.Source)
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.Name, err)
+		}
+		paths[i] = filepath.Clean(p)
+	}
+
+	for i, c := range cfgs {
+		for j := 0; j < i; j++ {
+			o := cfgs[j]
+			// Overlapping trees first: two jobs pointed at one source also
+			// produce one state path, and the overlap is the root cause.
+			for _, pair := range []struct{ aName, aWhat, a, bName, bWhat, b string }{
+				{o.Name, "source", o.Source, c.Name, "source", c.Source},
+				{o.Name, "source", o.Source, c.Name, "dest", c.Dest},
+				{o.Name, "dest", o.Dest, c.Name, "source", c.Source},
+			} {
+				if nested(pair.a, pair.b) || nested(pair.b, pair.a) {
+					return fmt.Errorf("%s's %s and %s's %s overlap (%s, %s): each job must own its own tree",
+						pair.aName, pair.aWhat, pair.bName, pair.bWhat, pair.a, pair.b)
+				}
+			}
+			// Two jobs on one SQLite file would interleave under WAL rather
+			// than fail, so this has to be caught before any work starts.
+			if paths[i] == paths[j] {
+				return fmt.Errorf("%s and %s resolve to the same state database (%s): give one of them its own state.dir or state.path",
+					o.Name, c.Name, paths[i])
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Config) Validate() error {
