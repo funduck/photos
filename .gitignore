@@ -10,3 +10,6 @@ services/ingest/config.yaml
 *.db
 *.db-wal
 *.db-shm
+
+# album-exporter
+services/album-exporter/config.yaml

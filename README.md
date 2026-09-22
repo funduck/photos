@@ -5,6 +5,7 @@
 - [Setup](#setup)
   - [Syncthing](#syncthing)
   - [Ingest](#ingest)
+  - [Album export](#album-export)
   - [Configs](#configs)
   - [HTTPS access (Caddy)](#https-access-caddy)
   - [S3 setup](#s3-setup)
@@ -69,6 +70,11 @@ It defaults to **dry-run**: read a pass's output first, then set `dry_run: false
 
 This setup also anticipates an eventual move to a NAS: once storage lives there, ingest and Immich would just point at a network share instead of a local USB drive.
 
+### Album export
+`services/album-exporter/` goes the other way: it copies the photos of chosen Immich albums into folders, e.g. "For Max" into a folder for syncthing to push to Max's phone. Each photo is exported once, and a file deleted from the folder stays deleted. The service is a container polling the Immich API, with its state DB on a named volume. Set `ALBUM_EXPORT_API_KEY`/`ALBUM_EXPORT_DIR` in `.env`, copy `services/album-exporter/config.example.yaml` to `config.yaml`, then `docker compose up -d --build album-exporter`. It defaults to dry run. See `services/album-exporter/README.md`.
+
+A destination must not be inside ingest's source (`~/SyncPhones`), or its photos would be ingested right back into the library. The exporter refuses any destination that has an `.ingest/` directory in it or in a directory above it.
+
 ### Configs
 Create your configuration from **example** files:
 * `.env.example` → `.env` — Immich/API secrets (`DB_PASSWORD`, `IMMICH_DEDUP_API_KEY`), the host paths `docker-compose.yml` mounts (`IMMICH_DIR`, `STORAGE_DIR`), and `IMMICH_DOMAIN` for the `caddy` reverse proxy.
@@ -101,7 +107,7 @@ Once up, Immich is reachable at `https://$IMMICH_DOMAIN`. `immich-server`'s port
 ### Start
 Two halves, started separately:
 ```
-docker compose up -d                       # Immich, Caddy, rclone-s3-sync
+docker compose up -d                       # Immich, Caddy, rclone-s3-sync, album-exporter
 cd services/ingest && make install-plist   # photos-ingest, under launchd
 ```
 Host syncthing runs on its own, outside both.

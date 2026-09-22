@@ -75,22 +75,6 @@ services:
     cap_drop:
       - NET_RAW
 
-  # syncthing:
-  #   container_name: syncthing
-  #   image: syncthing/syncthing:latest
-  #   environment:
-  #     - PUID=503
-  #     - PGID=20
-  #   volumes:
-  #     - $IMMICH_DIR/syncthing-config:/var/syncthing/config
-  #     - $STORAGE_DIR:/var/syncthing/data
-  #   user: "503:20"
-  #   ports:
-  #     - "8385:8384"
-  #     - "22001:22000/tcp"
-  #     - "22001:22000/udp"
-  #   restart: unless-stopped
-
   rclone-s3-sync:
     container_name: rclone_s3_sync
     build: ./services/rclone-s3-sync
@@ -107,6 +91,26 @@ services:
     volumes:
       - $STORAGE_DIR:/data:ro
       - rclone_s3_sync:/state
+    restart: unless-stopped
+    user: "503:20"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
+  album-exporter:
+    container_name: album_exporter
+    build: ./services/album-exporter
+    environment:
+      TZ: Asia/Tbilisi
+      ALBUM_EXPORT_API_KEY: ${ALBUM_EXPORT_API_KEY}
+    volumes:
+      # Copy config.example.yaml to config.yaml first, or docker creates a directory here.
+      - ./services/album-exporter/config.yaml:/config/config.yaml:ro
+      - ${ALBUM_EXPORT_DIR}:/export
+      - album_exporter:/state
+    depends_on:
+      - immich-server
     restart: unless-stopped
     user: "503:20"
     security_opt:
@@ -143,3 +147,4 @@ volumes:
   rclone_s3_sync:
   caddy_data:
   caddy_config:
+  album_exporter:

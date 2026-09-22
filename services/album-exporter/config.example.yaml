@@ -1,0 +1,30 @@
+# album-exporter config. Copy to config.yaml (gitignored), which compose mounts
+# read-only at /config/config.yaml. ${VAR} is expanded from the environment.
+
+# Reached over the compose network; no need to go through Caddy.
+immich_url: http://immich-server:2283
+# Immich -> Account Settings -> API Keys, with permissions
+# album.read, asset.read, asset.download.
+api_key: ${ALBUM_EXPORT_API_KEY}
+
+poll_interval: 10m
+# Logs what would be exported and writes nothing, not even state. Flip once the
+# log lists the right files.
+dry_run: true
+
+state:
+  # One DB for all jobs, on the album_exporter_state volume. Never inside a
+  # dest: that is the tree being synced to phones and pruned by hand.
+  path: /state/state.db
+  # A failing download is retried with exponential backoff, then parked.
+  max_attempts: 5
+  retry_backoff: 1m
+  retry_max: 6h
+
+# One job per album. Each asset is exported once: files deleted from dest, or
+# assets removed from the album, stay gone. Renaming a job re-exports its album.
+jobs:
+  - name: for-max
+    album: "For Max"        # album name, or its ID if several share the name
+    dest: /export/for-max   # /export is ${ALBUM_EXPORT_DIR} on the host
+    live_photo_video: false # also export the motion half of live photos
