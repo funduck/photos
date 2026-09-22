@@ -100,6 +100,8 @@ services:
 
   album-exporter:
     container_name: album_exporter
+    # Optional: started only with COMPOSE_PROFILES=album-exporter (see README).
+    profiles: [album-exporter]
     build: ./services/album-exporter
     environment:
       TZ: Asia/Tbilisi

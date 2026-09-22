@@ -5,11 +5,11 @@
 - [Setup](#setup)
   - [Syncthing](#syncthing)
   - [Ingest](#ingest)
-  - [Album export](#album-export)
   - [Configs](#configs)
   - [HTTPS access (Caddy)](#https-access-caddy)
   - [S3 setup](#s3-setup)
   - [Backups](#backups)
+- [Album Export](#album-export)
 - [Duplicates Resolution](#duplicates-resolution)
 - [What's missing / TODO](#whats-missing--todo)
 
@@ -70,11 +70,6 @@ It defaults to **dry-run**: read a pass's output first, then set `dry_run: false
 
 This setup also anticipates an eventual move to a NAS: once storage lives there, ingest and Immich would just point at a network share instead of a local USB drive.
 
-### Album export
-`services/album-exporter/` goes the other way: it copies the photos of chosen Immich albums into folders, e.g. "For Max" into a folder for syncthing to push to Max's phone. Each photo is exported once, and a file deleted from the folder stays deleted. The service is a container polling the Immich API, with its state DB on a named volume. Set `ALBUM_EXPORT_API_KEY`/`ALBUM_EXPORT_DIR` in `.env`, copy `services/album-exporter/config.example.yaml` to `config.yaml`, then `docker compose up -d --build album-exporter`. It defaults to dry run. See `services/album-exporter/README.md`.
-
-A destination must not be inside ingest's source (`~/SyncPhones`), or its photos would be ingested right back into the library. The exporter refuses any destination that has an `.ingest/` directory in it or in a directory above it.
-
 ### Configs
 Create your configuration from **example** files:
 * `.env.example` → `.env` — Immich/API secrets (`DB_PASSWORD`, `IMMICH_DEDUP_API_KEY`), the host paths `docker-compose.yml` mounts (`IMMICH_DIR`, `STORAGE_DIR`), and `IMMICH_DOMAIN` for the `caddy` reverse proxy.
@@ -107,7 +102,7 @@ Once up, Immich is reachable at `https://$IMMICH_DOMAIN`. `immich-server`'s port
 ### Start
 Two halves, started separately:
 ```
-docker compose up -d                       # Immich, Caddy, rclone-s3-sync, album-exporter
+docker compose up -d                       # Immich, Caddy, rclone-s3-sync
 cd services/ingest && make install-plist   # photos-ingest, under launchd
 ```
 Host syncthing runs on its own, outside both.
@@ -117,6 +112,22 @@ Host syncthing runs on its own, outside both.
 * **Immich data** (`$IMMICH_DIR`: uploads, thumbnails, Postgres, configs) is backed up manually with `scripts/backup_immich.sh` to `$IMMICH_BACKUP_DIR` (set in `scripts/.env`, e.g. a folder on the external drive). The script:
   1. copies everything except `postgres-data` with `rsync --ignore-existing`, so files that already exist in the backup are not updated;
   2. stops `immich_postgres` if it's running, copies `postgres-data` in full, and starts the database again.
+
+## Album Export
+An optional extra that runs the pipeline the other way. `services/album-exporter/` copies the photos of chosen Immich albums into plain folders, for example "For Max" into a folder that syncthing shares with Max's phone.
+
+* **Each photo is exported once.** Deleting a file from the folder, or removing a photo from the album, never brings the file back. The exporter never deletes anything. A SQLite state DB keyed by Immich asset ID decides what was already exported, not the folder contents. It lives on the `album_exporter_state` named volume, outside the folder.
+* **It's a container that polls the Immich API**, every 10 minutes by default, with no transcoding and no file watching. Originals are downloaded over the compose network, so it works for uploaded assets as well as the external library.
+* **It never overwrites a file.** A name clash gets part of the asset ID added to the file name.
+* **It never writes into an ingest source.** Photos exported into ingest's source (`~/SyncPhones`) would be ingested straight back into the library as duplicates. So the exporter refuses a destination that has an `.ingest/` directory in it or in any directory above it. It can only see as far up as its mount, so keep `ALBUM_EXPORT_DIR` itself outside `~/SyncPhones`.
+
+It is behind a compose profile, so a plain `docker compose up -d` leaves it out. To enable it:
+1. In Immich, create an API key under **Account Settings → API Keys** with `album.read`, `asset.read` and `asset.download`.
+2. In `.env`, set `ALBUM_EXPORT_API_KEY` and `ALBUM_EXPORT_DIR`, the host folder mounted at `/export`. Also set `COMPOSE_PROFILES=album-exporter` so that `docker compose up -d` includes the exporter.
+3. Copy `services/album-exporter/config.example.yaml` to `config.yaml` (gitignored) and list one job per album. Each job's `dest` goes under `/export`. Do this before the first start: if the file is missing, docker creates a directory in its place.
+4. `docker compose up -d --build album-exporter`. It defaults to **dry run**: check that the log lists the right photos, then set `dry_run: false` in `config.yaml` and `docker compose restart album-exporter`.
+
+`docker compose run --rm album-exporter -report` shows per-album totals and failures. `services/album-exporter/README.md` has the details.
 
 ## Duplicates Resolution
 Immich has a built-in functionality but when there are just too many duplicates with same names you can use `scripts/duplicate_resolver.py` to automatically delete these duplicates. 

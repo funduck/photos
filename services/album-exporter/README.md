@@ -18,7 +18,7 @@ Once is decided by a SQLite state DB keyed by **job name + Immich asset ID**, no
 1. In Immich, create an API key under **Account Settings → API Keys** with `album.read`, `asset.read` and `asset.download`.
 2. In the root `.env`, set `ALBUM_EXPORT_API_KEY` and set `ALBUM_EXPORT_DIR`, the host folder mounted at `/export`.
 3. `cp config.example.yaml config.yaml` (gitignored). Every job's `dest` goes under `/export`. Do this before the first `up`: if the file is missing, compose creates a directory in its place.
-4. `docker compose up -d --build album-exporter`, then read the log: dry run lists what it would export and writes nothing, not even state.
+4. The service is behind the `album-exporter` compose profile. Set `COMPOSE_PROFILES=album-exporter` in `.env`, or name the service explicitly as below. Run `docker compose up -d --build album-exporter`, then read the log: dry run lists what it would export and writes nothing, not even state.
 5. Set `dry_run: false` in `config.yaml` and run `docker compose restart album-exporter`.
 
 ## Operating it
