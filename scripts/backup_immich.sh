@@ -1,10 +1,11 @@
 #!/bin/bash
-# Run after immich is down
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env"
 
-src=$IMMICH_DIR/
-dst=$IMMICH_BACKUP_DIR/
+# Only library folder is important, it contains all assets and database dumps made by Immich
+# Rest (postgres-data, redis, ml-model-cache) is not critical
+src=$IMMICH_DIR/library/
+dst=$IMMICH_BACKUP_DIR/library/
 
 if [ ! -d "$dst" ]; then
     echo "Destination directory $dst does not exist. Creating."
@@ -15,20 +16,6 @@ if [ ! -d "$src" ]; then
     exit 1
 fi
 
-# Backup all except database
-rsync -av --ignore-existing --progress --exclude '/postgres-data' "$src" "$dst"
-echo "Immich assets backup completed successfully."
-
-# Backup database
-isDbRunning=$(docker ps -q -f name=immich_postgres)
-if [ -n "$isDbRunning" ]; then
-    echo "Immich database is running. Stopping it for backup."
-    docker stop immich_postgres
-fi
-rsync -av --progress "$src/postgres-data" "$dst/postgres-data"
-if [ -n "$isDbRunning" ]; then
-    echo "Starting Immich database back up."
-    docker start immich_postgres
-fi
+rsync -av --delete --progress --dry-run "$src" "$dst"
 
 echo "Immich backup $src to $dst completed successfully."
