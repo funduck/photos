@@ -10,6 +10,7 @@
   - [S3 setup](#s3-setup)
   - [Backups](#backups)
 - [Album Export](#album-export)
+- [Person Albums](#person-albums)
 - [Duplicates Resolution](#duplicates-resolution)
 - [What's missing / TODO](#whats-missing--todo)
 
@@ -128,6 +129,20 @@ It is behind a compose profile, so a plain `docker compose up -d` leaves it out.
 4. `docker compose up -d --build album-exporter`. It defaults to **dry run**: check that the log lists the right photos, then set `dry_run: false` in `config.yaml` and `docker compose restart album-exporter`.
 
 `docker compose run --rm album-exporter -report` shows per-album totals and failures. `services/album-exporter/README.md` has the details.
+
+## Person Albums
+An optional extra that fills Immich albums by face. `services/person-album/` adds every photo with a chosen person, for example Max, to an album. Immich workflows can't do this yet: they have no person filter, and face recognition runs after upload, later than any upload trigger. So the service polls instead. Combined with [Album Export](#album-export), this gives person → album → folder on a phone.
+
+* **Each photo is added once.** Removing a photo from the album, say a wrong face match, never brings it back. A SQLite state DB keyed by Immich asset ID decides what was already added, on the `person_album` named volume.
+* **Jobs run per account.** Immich keeps separate people and albums for each user, so every job carries the API key of the account it runs as.
+* A photo shows up in the album one poll after face recognition has tagged it. The first real run adds every photo that already matches.
+
+1. In Immich, create the album. The service never creates albums, so a typo shows up as an error.
+2. For each account that jobs run as, create an API key under **Account Settings → API Keys** with `person.read`, `asset.read`, `album.read` and `albumAsset.create`. Set it in `.env` as `PERSON_ALBUM_API_KEY_OLEG` or `PERSON_ALBUM_API_KEY_KATE` (another account needs a line in `docker-compose.yml` too). Add `person-album` to `COMPOSE_PROFILES` (comma-separated).
+3. Copy `services/person-album/config.example.yaml` to `config.yaml` (gitignored). List one job per album: its `api_key` (e.g. `${PERSON_ALBUM_API_KEY_KATE}`), `people`, `match: any` (any of them is in the photo) or `match: all` (every one of them is), and the `album`.
+4. `docker compose up -d --build person-album`. It defaults to **dry run**: check the log, then set `dry_run: false` and `docker compose restart person-album`.
+
+`docker compose run --rm person-album -report` shows per-job totals and failures. `services/person-album/README.md` has the details.
 
 ## Duplicates Resolution
 Immich has a built-in functionality but when there are just too many duplicates with same names you can use `scripts/duplicate_resolver.py` to automatically delete these duplicates. 

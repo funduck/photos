@@ -120,6 +120,30 @@ services:
     cap_drop:
       - NET_RAW
 
+  person-album:
+    container_name: person_album
+    # Optional: started only with COMPOSE_PROFILES=person-album (see README).
+    profiles: [person-album]
+    build: ./services/person-album
+    environment:
+      TZ: Asia/Tbilisi
+      # One API key per Immich account that jobs run as; config.yaml picks one per
+      # job. Add a line here for another account.
+      PERSON_ALBUM_API_KEY_OLEG: ${PERSON_ALBUM_API_KEY_OLEG:-}
+      PERSON_ALBUM_API_KEY_KATE: ${PERSON_ALBUM_API_KEY_KATE:-}
+    volumes:
+      # Copy config.example.yaml to config.yaml first, or docker creates a directory here.
+      - ./services/person-album/config.yaml:/config/config.yaml:ro
+      - person_album:/state
+    depends_on:
+      - immich-server
+    restart: unless-stopped
+    user: "503:20"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
   caddy:
     container_name: caddy
     image: caddy:2-alpine
@@ -150,3 +174,4 @@ volumes:
   caddy_data:
   caddy_config:
   album_exporter:
+  person_album:

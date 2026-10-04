@@ -1,0 +1,31 @@
+# person-album config. Copy to config.yaml (gitignored), which compose mounts
+# read-only at /config/config.yaml. ${VAR} is expanded from the environment.
+
+# Reached over the compose network; no need to go through Caddy.
+immich_url: http://immich-server:2283
+
+poll_interval: 15m
+# Logs what would be added and changes nothing, not even state. Flip once the
+# log lists the right photos.
+dry_run: true
+
+state:
+  # One DB for all jobs, on the person_album volume.
+  path: /state/state.db
+  # A rejected addition is retried with exponential backoff, then parked.
+  max_attempts: 5
+  retry_backoff: 1m
+  retry_max: 6h
+
+# One job per album. Each asset is added once: a photo removed from the album
+# stays removed. Renaming a job adds everything that matches again.
+jobs:
+  - name: max
+    # People and albums belong to one Immich user, so each job runs as an
+    # account: its API key (Account Settings -> API Keys, with person.read,
+    # asset.read, album.read, albumAsset.create) decides whose faces are searched
+    # and whose albums are seen. docker-compose.yml passes one variable per account.
+    api_key: ${PERSON_ALBUM_API_KEY_OLEG}
+    people: ["Max"] # person names, or their IDs if a name is empty or shared
+    match: any      # any: one of the people is in the photo; all: every one is
+    album: "Max"    # album name, or its ID if several share the name; must exist

@@ -13,3 +13,6 @@ services/ingest/config.yaml
 
 # album-exporter
 services/album-exporter/config.yaml
+
+# person-album
+services/person-album/config.yaml
